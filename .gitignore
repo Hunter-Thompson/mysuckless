@@ -4,6 +4,7 @@ dwm.o
 config.def.h
 dwm/dwm
 dmenu/dmenu
+slstatus/slstatus
 dwmstatus/dwmstatus
 
 
@@ -61,3 +62,4 @@ Mkfile.old
 dkms.conf
 
 **patches/*
+
