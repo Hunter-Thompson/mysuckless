@@ -60,14 +60,18 @@ static const char unknown_str[] = "n/a";
  * username            username of current user        NULL
  * vol_perc            OSS/ALSA volume in percent      mixer file (/dev/mixer)
  *                                                     NULL on OpenBSD
- * wifi_perc           WiFi signal in percent          interface name (wlan0)
+ * wifi_perc           WiFi signal in percent          interface nsme (wlan0)
  * wifi_essid          WiFi ESSID                      interface name (wlan0)
  */
 static const struct arg args[] = {
 	/* function format          argument */
-        { netspeed_rx, "NREC: %s", "wlan0" },
+        { netspeed_rx, "ENREC: %s", "eno2" },
         { separator, " | ", NULL },
-        { netspeed_tx, "NTRA: %s", "wlan0" },
+        { netspeed_tx, "ENTRA: %s", "eno2" },
+        { separator, " | ", NULL },
+        { netspeed_rx, "WNREC: %s", "wlan0" },
+        { separator, " | ", NULL },
+        { netspeed_tx, "WNTRA: %s", "wlan0" },
         { separator, " | ", NULL },
         { cpu_perc,      "[CPU: %s %%]",    NULL },
         { separator, " | ", NULL},
@@ -77,5 +81,7 @@ static const struct arg args[] = {
         { separator, " | ", NULL},
         { battery_perc,  "[B: %s %%]",    "BAT0" },
         { separator, " | ", NULL},
-	{ datetime, "%s",           "D: %F|T: %T" },
+        { run_command, "%s", "TZ=Europe/Berlin date +\"BER: D: %F|T: %T\"" },
+        { separator, " | ", NULL},
+        { run_command, "%s", "TZ=Asia/Kolkata date +\"IST: D: %F|T: %T\"" },
 };
