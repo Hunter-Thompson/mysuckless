@@ -2,6 +2,7 @@
 #import <ApplicationServices/ApplicationServices.h>
 #import <signal.h>
 #import <sys/file.h>
+#import <sys/stat.h>
 #import <unistd.h>
 #import <fcntl.h>
 #import <math.h>
@@ -244,7 +245,7 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 {
 	NSMutableArray *result = [NSMutableArray array];
 	for (Client *c in m.clients)
-		if ((c.tags & m.tags) && !c.minimized && !c.nativeFullscreen && (!tiled || (!c.floating && !c.fullscreen))) [result addObject:c];
+		if ((c.tags & m.tags) && !c.hidden && !c.minimized && !c.nativeFullscreen && (!tiled || (!c.floating && !c.fullscreen))) [result addObject:c];
 	return result;
 }
 
@@ -342,9 +343,17 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 {
 	(void)timer;
 	NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/dwm/status"];
-	NSFileHandle *file = [NSFileHandle fileHandleForReadingAtPath:path];
-	NSData *data = [file readDataUpToLength:4096 error:NULL];
-	[file closeFile];
+	int fd = open(path.fileSystemRepresentation, O_RDONLY|O_NONBLOCK);
+	NSData *data = nil;
+	if (fd >= 0) {
+		struct stat info;
+		if (fstat(fd, &info) == 0 && S_ISREG(info.st_mode)) {
+			char buffer[4096];
+			ssize_t length = read(fd, buffer, sizeof(buffer));
+			if (length >= 0) data = [NSData dataWithBytes:buffer length:(NSUInteger)length];
+		}
+		close(fd);
+	}
 	self.status = data ? ([[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"dwm") : @"dwm";
 	[self sync];
 }
@@ -523,7 +532,7 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 	BOOL down = type == kCGEventLeftMouseDown || type == kCGEventRightMouseDown || type == kCGEventOtherMouseDown;
 	BOOL up = type == kCGEventLeftMouseUp || type == kCGEventRightMouseUp || type == kCGEventOtherMouseUp;
 	int button = (int)CGEventGetIntegerValueField(event, kCGMouseEventButtonNumber);
-	if (down && flags == ALT) {
+	if (down && flags == ALT && button <= 2) {
 		Client *c = [self clientAt:p];
 		if (!c || c.fullscreen || c.nativeFullscreen) return event;
 		[self focus:c];
@@ -636,9 +645,9 @@ int main(void)
 	@autoreleasepool {
 		NSApplication *app = NSApplication.sharedApplication;
 		[app setActivationPolicy:NSApplicationActivationPolicyAccessory];
-		Manager *manager = [Manager new];
+		__attribute__((objc_precise_lifetime)) Manager *manager = [Manager new];
 		app.delegate = manager;
 		[app run];
+		return 0;
 	}
-	return 0;
 }
