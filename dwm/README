@@ -2,6 +2,13 @@ dwm - dynamic window manager
 ============================
 dwm is an extremely fast, small, and dynamic window manager for X.
 
+Native macOS backend
+--------------------
+On macOS, make selects the experimental native backend in macos/ (no XQuartz).
+Read macos/README.md for permissions, configuration, controls and validation,
+and macos/PARITY.md for the function inventory and explicit platform limits.
+The instructions below describe the unchanged X11 backend.
+
 
 Requirements
 ------------
