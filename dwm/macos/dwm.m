@@ -113,6 +113,13 @@ static NSColor *color(unsigned rgb)
 @property(weak) Monitor *monitor;
 @end
 
+/* AppKit keeps windows out of the menu bar and notch strip; the bar may go there */
+@interface BarPanel : NSPanel
+@end
+@implementation BarPanel
+- (NSRect)constrainFrameRect:(NSRect)frameRect toScreen:(NSScreen *)screen { (void)screen; return frameRect; }
+@end
+
 @interface Monitor : NSObject
 @property(strong) NSNumber *display;
 @property DwmRect frame, work;     /* CoreGraphics coordinates, origin top-left */
@@ -335,7 +342,7 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 		NSLog(@"display %@: %gx%g, work area %gx%g at %g,%g%@%@", display, m.frame.w, m.frame.h, m.work.w, m.work.h, m.work.x, m.work.y,
 			menuBarHidden ? @" (menu bar hides)" : @"", m.notchBar ? @", bar beside the notch" : @"");
 		if (!m.panel) {
-			m.panel = [[NSPanel alloc] initWithContentRect:NSZeroRect styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];
+			m.panel = [[BarPanel alloc] initWithContentRect:NSZeroRect styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];
 			m.panel.level = NSFloatingWindowLevel;
 			m.panel.hidesOnDeactivate = NO;
 			m.panel.hasShadow = NO;
