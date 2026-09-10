@@ -77,6 +77,12 @@ static BOOL matches(DwmRect r, CGRect b)
 	return fabs(r.x - b.origin.x) < 2 && fabs(r.y - b.origin.y) < 2 && fabs(r.w - b.size.width) < 2 && fabs(r.h - b.size.height) < 2;
 }
 
+/* the menu bar auto-hide setting; visibleFrame does not reflect it */
+static BOOL menuBarAutoHides(void)
+{
+	return [[[NSUserDefaults standardUserDefaults] persistentDomainForName:NSGlobalDomain][@"_HIHideMenuBar"] boolValue];
+}
+
 static NSColor *color(unsigned rgb)
 {
 	return [NSColor colorWithRed:((rgb >> 16) & 255) / 255.0 green:((rgb >> 8) & 255) / 255.0 blue:(rgb & 255) / 255.0 alpha:1];
@@ -167,7 +173,7 @@ static NSColor *color(unsigned rgb)
 @property CGFloat top;   /* height of the primary display, converts CG and AppKit y */
 @property NSTimeInterval quietUntil;
 @property int dragButton, lockFD;
-@property BOOL pointerPending, syncPending, stopping, waiting;
+@property BOOL pointerPending, syncPending, stopping, waiting, menuBarHidden;
 @property(strong) dispatch_source_t interruptSource, terminateSource;
 - (void)scheduleSync;
 - (void)sync;
@@ -292,6 +298,7 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 	(void)notification;
 	NSMutableArray *next = [NSMutableArray array];
 	self.top = NSMaxY(NSScreen.screens.firstObject.frame);
+	BOOL menuBarHidden = self.menuBarHidden = menuBarAutoHides();
 	for (NSScreen *screen in NSScreen.screens) {
 		NSNumber *display = screen.deviceDescription[@"NSScreenNumber"];
 		Monitor *m = nil;
@@ -300,6 +307,12 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 		CGRect frame = CGDisplayBounds(display.unsignedIntValue);
 		m.frame = (DwmRect){frame.origin.x, frame.origin.y, frame.size.width, frame.size.height};
 		NSRect visible = screen.visibleFrame;   /* excludes menu bar, notch and Dock */
+		if (menuBarHidden) {
+			/* visibleFrame keeps reserving the menu bar when it auto-hides; take the space back, minus any notch */
+			CGFloat top = NSMaxY(screen.frame);
+			if (@available(macOS 12.0, *)) top -= screen.safeAreaInsets.top;
+			if (top > NSMaxY(visible)) visible.size.height += top - NSMaxY(visible);
+		}
 		m.work = (DwmRect){visible.origin.x, self.top - NSMaxY(visible), visible.size.width, visible.size.height};
 		if (!m.panel) {
 			m.panel = [[NSPanel alloc] initWithContentRect:NSZeroRect styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];
@@ -522,6 +535,7 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 	}
 	NSString *status = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : nil;
 	self.status = [status stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"dwm";
+	if (menuBarAutoHides() != self.menuBarHidden) [self screensChanged:nil];
 	[self sync];
 }
 

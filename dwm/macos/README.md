@@ -42,7 +42,8 @@ it hid and leaves everything else where it is.
   move; dwm logs the first refusal per window. Non-resizable windows, dialogs and
   panels start floating.
 - **The bar** sits at the top of each display's visible area, below the menu bar
-  and clear of the Dock and notch. Layout: tags, layout symbol, title, status.
+  and clear of the Dock and notch. With the menu bar set to auto-hide, the bar
+  and the tiles use the full height (the auto-hidden menu bar slides over them). Layout: tags, layout symbol, title, status.
   Status text is read every half second from
   `~/Library/Application Support/dwm/status` (UTF-8, first 4 KiB), e.g.
 
