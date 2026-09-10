@@ -80,7 +80,9 @@ static BOOL matches(DwmRect r, CGRect b)
 /* the menu bar auto-hide setting; visibleFrame does not reflect it */
 static BOOL menuBarAutoHides(void)
 {
-	return [[[NSUserDefaults standardUserDefaults] persistentDomainForName:NSGlobalDomain][@"_HIHideMenuBar"] boolValue];
+	Boolean exists = false;
+	Boolean hides = CFPreferencesGetAppBooleanValue(CFSTR("_HIHideMenuBar"), kCFPreferencesAnyApplication, &exists);
+	return exists && hides;
 }
 
 static NSColor *color(unsigned rgb)
@@ -307,13 +309,15 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 		CGRect frame = CGDisplayBounds(display.unsignedIntValue);
 		m.frame = (DwmRect){frame.origin.x, frame.origin.y, frame.size.width, frame.size.height};
 		NSRect visible = screen.visibleFrame;   /* excludes menu bar, notch and Dock */
-		if (menuBarHidden) {
-			/* visibleFrame keeps reserving the menu bar when it auto-hides; take the space back, minus any notch */
-			CGFloat top = NSMaxY(screen.frame);
-			if (@available(macOS 12.0, *)) top -= screen.safeAreaInsets.top;
-			if (top > NSMaxY(visible)) visible.size.height += top - NSMaxY(visible);
+		CGFloat inset = menuBarInset;
+		if (inset < 0 && menuBarHidden) inset = 0;   /* visibleFrame keeps reserving an auto-hidden menu bar */
+		if (inset >= 0) {
+			CGFloat top = NSMaxY(screen.frame) - inset;
+			if (@available(macOS 12.0, *)) top = MIN(top, NSMaxY(screen.frame) - screen.safeAreaInsets.top);
+			visible.size.height = top - visible.origin.y;
 		}
 		m.work = (DwmRect){visible.origin.x, self.top - NSMaxY(visible), visible.size.width, visible.size.height};
+		NSLog(@"display %@: %gx%g, work area %gx%g at %g,%g%@", display, m.frame.w, m.frame.h, m.work.w, m.work.h, m.work.x, m.work.y, menuBarHidden ? @" (menu bar hides)" : @"");
 		if (!m.panel) {
 			m.panel = [[NSPanel alloc] initWithContentRect:NSZeroRect styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];
 			m.panel.level = NSFloatingWindowLevel;

@@ -4,6 +4,11 @@
 /* appearance */
 static const CGFloat barHeight = 25;       /* points */
 static const BOOL topBar = YES;
+/* Points reserved at the top of every display for the macOS menu bar.
+ * -1: detect (menu bar height, or 0 when it is set to hide automatically).
+ *  0: menu bar hidden, use the whole display (a notch is always respected).
+ *  n: reserve n points. */
+static const CGFloat menuBarInset = -1;
 static const CGFloat fontSize = 14;
 static const unsigned colNormFG = 0xbbbbbb, colNormBG = 0x222222;
 static const unsigned colSelFG = 0xeeeeee, colSelBG = 0x005577;

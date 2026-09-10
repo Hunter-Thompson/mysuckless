@@ -43,7 +43,9 @@ it hid and leaves everything else where it is.
   panels start floating.
 - **The bar** sits at the top of each display's visible area, below the menu bar
   and clear of the Dock and notch. With the menu bar set to auto-hide, the bar
-  and the tiles use the full height (the auto-hidden menu bar slides over them). Layout: tags, layout symbol, title, status.
+  and the tiles use the full height (the auto-hidden menu bar slides over them).
+  If dwm still leaves a gap at the top, set `menuBarInset` in `config.h` to 0;
+  dwm logs each display's work area at startup. Layout: tags, layout symbol, title, status.
   Status text is read every half second from
   `~/Library/Application Support/dwm/status` (UTF-8, first 4 KiB), e.g.
 
