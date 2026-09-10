@@ -1,5 +1,5 @@
 /* Native macOS configuration. Mirrors ../../dwm/config.h where the platform allows;
- * key codes are physical ANSI positions and Option replaces Mod1. */
+ * key codes are physical ANSI positions and Command replaces Mod1. */
 
 /* appearance */
 static const CGFloat barHeight = 25;       /* points */
@@ -43,14 +43,14 @@ static const CGKeyCode launcherKey = 49;
 static const CGEventFlags launcherModifiers = kCGEventFlagMaskCommand;
 
 /* key definitions */
-#define ALT kCGEventFlagMaskAlternate
+#define MODKEY kCGEventFlagMaskCommand
 #define SHIFT kCGEventFlagMaskShift
 #define CTRL kCGEventFlagMaskControl
 #define TAGKEY(code, mask) \
-	{code, ALT, @"view", mask}, \
-	{code, ALT|CTRL, @"toggleview", mask}, \
-	{code, ALT|SHIFT, @"tag", mask}, \
-	{code, ALT|CTRL|SHIFT, @"toggletag", mask}
+	{code, MODKEY, @"view", mask}, \
+	{code, MODKEY|CTRL, @"toggleview", mask}, \
+	{code, MODKEY|SHIFT, @"tag", mask}, \
+	{code, MODKEY|CTRL|SHIFT, @"toggletag", mask}
 static const struct {
 	CGKeyCode code;
 	CGEventFlags modifiers;
@@ -58,31 +58,31 @@ static const struct {
 	int value;
 } keys[] = {
 	/* code  modifiers        action            value */
-	{35, ALT,            @"launcher",       0},   /* p */
-	{36, ALT|SHIFT,      @"spawn",          0},   /* return: commands[0] */
-	{11, ALT,            @"togglebar",      0},   /* b */
-	{38, ALT,            @"focusstack",     1},   /* j */
-	{40, ALT,            @"focusstack",    -1},   /* k */
-	{34, ALT,            @"incnmaster",     1},   /* i */
-	{2,  ALT,            @"incnmaster",    -1},   /* d */
-	{4,  ALT,            @"setmfact",      -1},   /* h */
-	{37, ALT,            @"setmfact",       1},   /* l */
-	{36, ALT,            @"zoom",           0},   /* return */
-	{48, ALT,            @"view",           0},   /* tab */
-	{8,  ALT|SHIFT,      @"killclient",     0},   /* c */
-	{17, ALT,            @"setlayout",      0},   /* t */
-	{3,  ALT,            @"setlayout",      1},   /* f */
-	{46, ALT,            @"setlayout",      2},   /* m */
-	{49, ALT,            @"setlayout",     -1},   /* space */
-	{49, ALT|SHIFT,      @"togglefloating", 0},   /* space */
-	{3,  ALT|SHIFT,      @"togglefullscr",  0},   /* f */
-	{29, ALT,            @"view",           DWM_TAGMASK}, /* 0 */
-	{29, ALT|SHIFT,      @"tag",            DWM_TAGMASK}, /* 0 */
-	{43, ALT,            @"focusmon",      -1},   /* comma */
-	{47, ALT,            @"focusmon",       1},   /* period */
-	{43, ALT|SHIFT,      @"tagmon",        -1},   /* comma */
-	{47, ALT|SHIFT,      @"tagmon",         1},   /* period */
+	{35, MODKEY,            @"launcher",       0},   /* p */
+	{36, MODKEY|SHIFT,      @"spawn",          0},   /* return: commands[0] */
+	{11, MODKEY,            @"togglebar",      0},   /* b */
+	{38, MODKEY,            @"focusstack",     1},   /* j */
+	{40, MODKEY,            @"focusstack",    -1},   /* k */
+	{34, MODKEY,            @"incnmaster",     1},   /* i */
+	{2,  MODKEY,            @"incnmaster",    -1},   /* d */
+	{4,  MODKEY,            @"setmfact",      -1},   /* h */
+	{37, MODKEY,            @"setmfact",       1},   /* l */
+	{36, MODKEY,            @"zoom",           0},   /* return */
+	{48, MODKEY,            @"view",           0},   /* tab */
+	{8,  MODKEY|SHIFT,      @"killclient",     0},   /* c */
+	{17, MODKEY,            @"setlayout",      0},   /* t */
+	{3,  MODKEY,            @"setlayout",      1},   /* f */
+	{46, MODKEY,            @"setlayout",      2},   /* m */
+	{49, MODKEY,            @"setlayout",     -1},   /* space */
+	{49, MODKEY|SHIFT,      @"togglefloating", 0},   /* space */
+	{3,  MODKEY|SHIFT,      @"togglefullscr",  0},   /* f */
+	{29, MODKEY,            @"view",           DWM_TAGMASK}, /* 0 */
+	{29, MODKEY|SHIFT,      @"tag",            DWM_TAGMASK}, /* 0 */
+	{43, MODKEY,            @"focusmon",      -1},   /* comma */
+	{47, MODKEY,            @"focusmon",       1},   /* period */
+	{43, MODKEY|SHIFT,      @"tagmon",        -1},   /* comma */
+	{47, MODKEY|SHIFT,      @"tagmon",         1},   /* period */
 	TAGKEY(18, 1), TAGKEY(19, 2), TAGKEY(20, 4), TAGKEY(21, 8), TAGKEY(23, 16),
-	{12, ALT|SHIFT,      @"quit",           0},   /* q */
+	{12, MODKEY|SHIFT,      @"quit",           0},   /* q */
 };
 #undef TAGKEY
