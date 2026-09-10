@@ -55,13 +55,8 @@ uninstall:
 .PHONY: all options clean dist install uninstall
 endif
 
-native:
-	$(MAKE) -C macos all
-
+# portable tests of the layout model shared with the macOS backend
 test-native:
 	$(MAKE) -C macos test
 
-install-native:
-	$(MAKE) -C macos install
-
-.PHONY: native test-native install-native
+.PHONY: test-native

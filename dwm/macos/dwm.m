@@ -1,25 +1,53 @@
+/* dwm for native macOS windows. See LICENSE file for copyright and license details.
+ *
+ * Windows are driven through the public Accessibility API, input arrives through
+ * a CoreGraphics event tap, and the on-screen window list from CoreGraphics is
+ * used for hit testing and to know which windows are on the current Space.
+ * Windows on hidden tags are parked one point inside the bottom-right corner of
+ * their display, the way dwm parks them off the X screen. */
 #import <AppKit/AppKit.h>
 #import <ApplicationServices/ApplicationServices.h>
+#import <dispatch/dispatch.h>
+#import <fcntl.h>
+#import <math.h>
 #import <signal.h>
 #import <sys/file.h>
 #import <sys/stat.h>
 #import <unistd.h>
-#import <fcntl.h>
-#import <math.h>
-#import <dispatch/dispatch.h>
 #import "model.h"
 #import "config.h"
+
+#define LENGTH(x) (sizeof(x) / sizeof((x)[0]))
+enum { Tile, Float, Monocle };
+_Static_assert((1u << LENGTH(tagNames)) - 1 == DWM_TAGMASK, "tagNames must match DWM_TAGMASK");
+_Static_assert(LENGTH(layoutNames) == 3, "three layouts: tile, float, monocle");
 
 static id attribute(AXUIElementRef element, CFStringRef name)
 {
 	CFTypeRef value = NULL;
-	if (AXUIElementCopyAttributeValue(element, name, &value) != kAXErrorSuccess) return nil;
+	if (!element || AXUIElementCopyAttributeValue(element, name, &value) != kAXErrorSuccess) return nil;
 	return CFBridgingRelease(value);
 }
 
 static BOOL setAttribute(AXUIElementRef element, CFStringRef name, id value)
 {
-	return AXUIElementSetAttributeValue(element, name, (__bridge CFTypeRef)value) == kAXErrorSuccess;
+	return element && AXUIElementSetAttributeValue(element, name, (__bridge CFTypeRef)value) == kAXErrorSuccess;
+}
+
+static BOOL setPosition(AXUIElementRef element, CGPoint p)
+{
+	AXValueRef value = AXValueCreate(kAXValueCGPointType, &p);
+	BOOL ok = element && AXUIElementSetAttributeValue(element, kAXPositionAttribute, value) == kAXErrorSuccess;
+	CFRelease(value);
+	return ok;
+}
+
+static BOOL setSize(AXUIElementRef element, CGSize s)
+{
+	AXValueRef value = AXValueCreate(kAXValueCGSizeType, &s);
+	BOOL ok = element && AXUIElementSetAttributeValue(element, kAXSizeAttribute, value) == kAXErrorSuccess;
+	CFRelease(value);
+	return ok;
 }
 
 static DwmRect geometry(AXUIElementRef element)
@@ -35,14 +63,36 @@ static DwmRect geometry(AXUIElementRef element)
 	return (DwmRect){p.x, p.y, s.width, s.height};
 }
 
+/* one entry of CGWindowListCopyWindowInfo: ordinary (layer 0) visible windows only */
+static BOOL windowInfo(NSDictionary *info, pid_t *pid, CGRect *bounds)
+{
+	if ([info[(__bridge NSString *)kCGWindowLayer] intValue] != 0) return NO;
+	if ([info[(__bridge NSString *)kCGWindowAlpha] doubleValue] <= 0) return NO;
+	*pid = [info[(__bridge NSString *)kCGWindowOwnerPID] intValue];
+	return CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(__bridge NSString *)kCGWindowBounds], bounds);
+}
+
+static BOOL matches(DwmRect r, CGRect b)
+{
+	return fabs(r.x - b.origin.x) < 2 && fabs(r.y - b.origin.y) < 2 && fabs(r.w - b.size.width) < 2 && fabs(r.h - b.size.height) < 2;
+}
+
+static NSColor *color(unsigned rgb)
+{
+	return [NSColor colorWithRed:((rgb >> 16) & 255) / 255.0 green:((rgb >> 8) & 255) / 255.0 blue:(rgb & 255) / 255.0 alpha:1];
+}
+
 @class Manager, Monitor;
 @interface Client : NSObject
 @property AXUIElementRef element;
 @property pid_t pid;
 @property unsigned tags;
-@property BOOL floating, fullscreen, wasFloating, hidden, minimized, nativeFullscreen;
-@property BOOL geometryFailed, visibilityFailed;
-@property DwmRect saved;
+@property BOOL floating, fullscreen, wasFloating;
+@property BOOL hidden;            /* parked in the display corner by dwm */
+@property BOOL away;              /* minimized, application hidden or on another Space */
+@property BOOL nativeFullscreen;  /* in a macOS fullscreen Space; never touched */
+@property BOOL geometryFailed;
+@property DwmRect frame, saved;   /* last known on-screen frame, frame before fullscreen */
 @property(strong) NSString *title;
 @property(weak) Monitor *monitor;
 @end
@@ -57,13 +107,13 @@ static DwmRect geometry(AXUIElementRef element)
 
 @interface Monitor : NSObject
 @property(strong) NSNumber *display;
-@property DwmRect frame, work;
+@property DwmRect frame, work;     /* CoreGraphics coordinates, origin top-left */
 @property unsigned tags, previousTags;
 @property int layout, previousLayout, masters;
 @property double factor;
 @property BOOL showbar;
-@property(strong) NSMutableArray<Client *> *clients;
-@property(strong) NSMutableArray<Client *> *history;
+@property(strong) NSMutableArray<Client *> *clients;   /* tiling order */
+@property(strong) NSMutableArray<Client *> *history;   /* focus order */
 @property(weak) Client *selected;
 @property(strong) NSPanel *panel;
 @end
@@ -72,7 +122,7 @@ static DwmRect geometry(AXUIElementRef element)
 {
 	if ((self = [super init])) {
 		_tags = _previousTags = 1;
-		_previousLayout = 1;
+		_previousLayout = Float;
 		_masters = 1;
 		_factor = 0.55;
 		_showbar = YES;
@@ -101,33 +151,37 @@ static DwmRect geometry(AXUIElementRef element)
 @interface Manager : NSObject <NSApplicationDelegate>
 @property(strong) NSMutableArray<Monitor *> *monitors;
 @property(strong) NSMutableDictionary<NSNumber *, ApplicationWatch *> *watches;
+@property(strong) NSArray<NSDictionary *> *windows;   /* on-screen windows, front to back */
 @property(weak) Monitor *selected;
+@property(weak) Client *osFocused;   /* managed window macOS reported focused at the last sync */
+@property(weak) Client *hovered;
+@property(strong) Client *dragClient;
 @property(strong) NSString *status;
 @property(strong) NSTimer *timer;
 @property CFMachPortRef tap;
 @property CFRunLoopSourceRef tapSource;
+@property AXUIElementRef systemElement;
 @property(strong) NSMutableIndexSet *heldKeys;
-@property(strong) Client *dragClient;
-@property CGPoint dragStart;
-@property CGPoint pointer;
-@property(weak) Client *hovered;
-@property BOOL pointerPending;
+@property CGPoint dragStart, pointer;
 @property DwmRect dragFrame;
-@property int dragButton;
-@property BOOL dirty, stopping;
+@property CGFloat top;   /* height of the primary display, converts CG and AppKit y */
+@property NSTimeInterval quietUntil;
+@property int dragButton, lockFD;
+@property BOOL pointerPending, syncPending, stopping, waiting;
 @property(strong) dispatch_source_t interruptSource, terminateSource;
-@property int lockFD;
+- (void)scheduleSync;
 - (void)sync;
 - (void)arrange;
-- (void)focus:(Client *)client;
+- (void)focus:(Client *)client raise:(BOOL)raise;
 - (void)action:(NSString *)name value:(int)value;
+- (NSArray<Client *> *)visible:(Monitor *)m tiled:(BOOL)tiled;
 - (CGEventRef)event:(CGEventRef)event type:(CGEventType)type;
 @end
 
 static void observed(AXObserverRef observer, AXUIElementRef element, CFStringRef notification, void *context)
 {
 	(void)observer; (void)element; (void)notification;
-	((__bridge Manager *)context).dirty = YES;
+	[(__bridge Manager *)context scheduleSync];
 }
 
 static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef event, void *context)
@@ -146,43 +200,62 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 {
 	(void)notification;
 	self.lockFD = -1;
-	NSDictionary *options = @{(__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES};
-	if (!AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options)) {
-		NSLog(@"Grant Accessibility access to dwm-macos in System Settings, then restart.");
-		[NSApp terminate:nil];
-		return;
-	}
 	NSString *support = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/dwm"];
 	NSError *error = nil;
 	if (![[NSFileManager defaultManager] createDirectoryAtPath:support withIntermediateDirectories:YES attributes:nil error:&error]) {
-		NSLog(@"Cannot create state directory: %@", error);
+		NSLog(@"Cannot create %@: %@", support, error);
 		[NSApp terminate:nil];
 		return;
 	}
 	self.lockFD = open([[support stringByAppendingPathComponent:@"lock"] fileSystemRepresentation], O_CREAT|O_RDWR, 0600);
 	if (self.lockFD < 0 || flock(self.lockFD, LOCK_EX|LOCK_NB) != 0) {
-		NSLog(@"Cannot acquire dwm lock; another instance may be running.");
+		NSLog(@"dwm is already running");
 		[NSApp terminate:nil];
 		return;
 	}
 	self.monitors = [NSMutableArray array];
 	self.watches = [NSMutableDictionary dictionary];
 	self.heldKeys = [NSMutableIndexSet indexSet];
+	self.windows = @[];
 	self.status = @"dwm";
+	[self start];
+}
+
+/* Waits for the permissions instead of exiting: grant them in System Settings
+ * and dwm picks up within a second, without a restart. */
+- (void)start
+{
+	NSDictionary *options = @{(__bridge NSString *)kAXTrustedCheckOptionPrompt: self.waiting ? @NO : @YES};
+	if (!AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options)) {
+		if (!self.waiting) NSLog(@"Waiting for Accessibility access (System Settings > Privacy & Security > Accessibility)");
+		self.waiting = YES;
+		[self performSelector:@selector(start) withObject:nil afterDelay:1];
+		return;
+	}
 	CGEventMask mask = CGEventMaskBit(kCGEventKeyDown)|CGEventMaskBit(kCGEventKeyUp)|
 		CGEventMaskBit(kCGEventLeftMouseDown)|CGEventMaskBit(kCGEventLeftMouseUp)|
 		CGEventMaskBit(kCGEventRightMouseDown)|CGEventMaskBit(kCGEventRightMouseUp)|
 		CGEventMaskBit(kCGEventOtherMouseDown)|CGEventMaskBit(kCGEventOtherMouseUp)|
-		CGEventMaskBit(kCGEventLeftMouseDragged)|CGEventMaskBit(kCGEventRightMouseDragged)|
-		CGEventMaskBit(kCGEventMouseMoved);
+		CGEventMaskBit(kCGEventLeftMouseDragged)|CGEventMaskBit(kCGEventRightMouseDragged);
+	if (sloppyFocus) mask |= CGEventMaskBit(kCGEventMouseMoved);
 	self.tap = CGEventTapCreate(kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault, mask, input, (__bridge void *)self);
 	if (!self.tap) {
-		NSLog(@"Cannot capture input. Grant Accessibility and Input Monitoring access, then restart.");
-		[NSApp terminate:nil];
+		if (!self.waiting) NSLog(@"Waiting for input access (System Settings > Privacy & Security > Input Monitoring)");
+		self.waiting = YES;
+		[self performSelector:@selector(start) withObject:nil afterDelay:1];
 		return;
 	}
+	self.waiting = NO;
 	self.tapSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, self.tap, 0);
 	CFRunLoopAddSource(CFRunLoopGetMain(), self.tapSource, kCFRunLoopCommonModes);
+	/* global AX timeout: an unresponsive application must not stall the manager */
+	self.systemElement = AXUIElementCreateSystemWide();
+	AXUIElementSetMessagingTimeout(self.systemElement, 0.25);
+	NSNotificationCenter *workspace = NSWorkspace.sharedWorkspace.notificationCenter;
+	for (NSNotificationName name in @[NSWorkspaceDidLaunchApplicationNotification, NSWorkspaceDidTerminateApplicationNotification,
+			NSWorkspaceDidActivateApplicationNotification, NSWorkspaceDidHideApplicationNotification,
+			NSWorkspaceDidUnhideApplicationNotification, NSWorkspaceActiveSpaceDidChangeNotification])
+		[workspace addObserver:self selector:@selector(scheduleSyncNotification:) name:name object:nil];
 	[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(screensChanged:) name:NSApplicationDidChangeScreenParametersNotification object:nil];
 	[self screensChanged:nil];
 	self.timer = [NSTimer timerWithTimeInterval:0.5 target:self selector:@selector(tick:) userInfo:nil repeats:YES];
@@ -198,11 +271,27 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 	dispatch_resume(self.terminateSource);
 }
 
+- (void)scheduleSyncNotification:(NSNotification *)notification
+{
+	(void)notification;
+	[self scheduleSync];
+}
+
+/* coalesces bursts of notifications into one reconciliation */
+- (void)scheduleSync
+{
+	if (self.syncPending || self.stopping) return;
+	self.syncPending = YES;
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+		if (!self.stopping) [self sync];
+	});
+}
+
 - (void)screensChanged:(NSNotification *)notification
 {
 	(void)notification;
 	NSMutableArray *next = [NSMutableArray array];
-	CGFloat top = NSMaxY(NSScreen.screens.firstObject.frame);
+	self.top = NSMaxY(NSScreen.screens.firstObject.frame);
 	for (NSScreen *screen in NSScreen.screens) {
 		NSNumber *display = screen.deviceDescription[@"NSScreenNumber"];
 		Monitor *m = nil;
@@ -210,14 +299,15 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 		if (!m) { m = [Monitor new]; m.display = display; }
 		CGRect frame = CGDisplayBounds(display.unsignedIntValue);
 		m.frame = (DwmRect){frame.origin.x, frame.origin.y, frame.size.width, frame.size.height};
-		NSRect visible = screen.visibleFrame;
-		m.work = (DwmRect){visible.origin.x, top - NSMaxY(visible), visible.size.width, visible.size.height};
+		NSRect visible = screen.visibleFrame;   /* excludes menu bar, notch and Dock */
+		m.work = (DwmRect){visible.origin.x, self.top - NSMaxY(visible), visible.size.width, visible.size.height};
 		if (!m.panel) {
 			m.panel = [[NSPanel alloc] initWithContentRect:NSZeroRect styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];
 			m.panel.level = NSFloatingWindowLevel;
 			m.panel.hidesOnDeactivate = NO;
-			m.panel.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces|NSWindowCollectionBehaviorFullScreenAuxiliary;
-			m.panel.backgroundColor = [NSColor colorWithWhite:0.13 alpha:1];
+			m.panel.hasShadow = NO;
+			m.panel.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces|NSWindowCollectionBehaviorFullScreenAuxiliary|NSWindowCollectionBehaviorStationary;
+			m.panel.backgroundColor = color(colNormBG);
 			Bar *bar = [Bar new]; bar.manager = self; bar.monitor = m;
 			m.panel.contentView = bar;
 		}
@@ -225,12 +315,13 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 	}
 	if (!next.count) return;
 	for (Monitor *old in self.monitors) if (![next containsObject:old]) {
-		Monitor *target = next.firstObject;
-		for (Client *c in old.clients) { c.monitor = target; [target.clients addObject:c]; [target.history addObject:c]; }
+		for (Client *c in [old.clients copy]) [self move:c to:next.firstObject relocate:YES];
 		[old.panel close];
 	}
 	self.monitors = next;
 	if (![next containsObject:self.selected]) self.selected = next.firstObject;
+	/* display corners moved; park hidden windows again */
+	for (Monitor *m in next) for (Client *c in m.clients) if (c.hidden) { c.hidden = NO; [self park:c]; }
 	[self arrange];
 }
 
@@ -241,99 +332,174 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 	return self.selected ?: self.monitors.firstObject;
 }
 
+- (BOOL)isVisible:(Client *)c
+{
+	return c && (c.tags & c.monitor.tags) && !c.hidden && !c.away && !c.nativeFullscreen;
+}
+
 - (NSArray<Client *> *)visible:(Monitor *)m tiled:(BOOL)tiled
 {
 	NSMutableArray *result = [NSMutableArray array];
 	for (Client *c in m.clients)
-		if ((c.tags & m.tags) && !c.hidden && !c.minimized && !c.nativeFullscreen && (!tiled || (!c.floating && !c.fullscreen))) [result addObject:c];
+		if ([self isVisible:c] && (!tiled || (!c.floating && !c.fullscreen))) [result addObject:c];
 	return result;
 }
 
-- (void)watch:(NSRunningApplication *)app
+- (void)refreshWindows
+{
+	self.windows = CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly|kCGWindowListExcludeDesktopElements, kCGNullWindowID)) ?: @[];
+}
+
+- (BOOL)onscreen:(pid_t)pid frame:(DwmRect)r
+{
+	for (NSDictionary *info in self.windows) {
+		pid_t owner; CGRect bounds;
+		if (windowInfo(info, &owner, &bounds) && owner == pid && matches(r, bounds)) return YES;
+	}
+	return NO;
+}
+
+/* the managed window on top at p, nil for the bar, the desktop or unmanaged windows */
+- (Client *)clientAt:(CGPoint)p
+{
+	for (Monitor *m in self.monitors)
+		if (m.panel.visible && NSPointInRect(NSMakePoint(p.x, self.top - p.y), m.panel.frame)) return nil;
+	for (NSDictionary *info in self.windows) {
+		pid_t owner; CGRect bounds;
+		if (!windowInfo(info, &owner, &bounds) || !CGRectContainsPoint(bounds, p)) continue;
+		for (Monitor *m in self.monitors) for (Client *c in m.clients)
+			if (c.pid == owner && !c.hidden && !c.away && matches(c.frame, bounds)) return c;
+		return nil;
+	}
+	return nil;
+}
+
+- (ApplicationWatch *)watch:(NSRunningApplication *)app
 {
 	NSNumber *pid = @(app.processIdentifier);
-	if (self.watches[pid]) return;
+	if (self.watches[pid]) return self.watches[pid];
 	ApplicationWatch *watch = [ApplicationWatch new];
 	watch.element = AXUIElementCreateApplication(app.processIdentifier);
-	AXUIElementSetMessagingTimeout(watch.element, 0.1);
 	AXObserverRef observer = NULL;
 	if (AXObserverCreate(app.processIdentifier, observed, &observer) == kAXErrorSuccess) {
 		watch.observer = observer;
-		for (NSString *name in @[(__bridge NSString *)kAXWindowCreatedNotification, (__bridge NSString *)kAXFocusedWindowChangedNotification])
+		for (NSString *name in @[(__bridge NSString *)kAXWindowCreatedNotification, (__bridge NSString *)kAXFocusedWindowChangedNotification,
+				(__bridge NSString *)kAXWindowMovedNotification, (__bridge NSString *)kAXWindowResizedNotification,
+				(__bridge NSString *)kAXWindowMiniaturizedNotification, (__bridge NSString *)kAXWindowDeminiaturizedNotification,
+				(__bridge NSString *)kAXTitleChangedNotification])
 			AXObserverAddNotification(observer, watch.element, (__bridge CFStringRef)name, (__bridge void *)self);
 		CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), kCFRunLoopCommonModes);
 	}
 	self.watches[pid] = watch;
+	return watch;
 }
 
+- (Client *)clientFor:(AXUIElementRef)element pid:(pid_t)pid
+{
+	for (Monitor *m in self.monitors) for (Client *c in m.clients)
+		if (c.pid == pid && CFEqual(c.element, element)) return c;
+	return nil;
+}
+
+- (Client *)manage:(AXUIElementRef)element pid:(pid_t)pid app:(NSRunningApplication *)app frame:(DwmRect)frame
+{
+	Client *c = [Client new];
+	c.element = (AXUIElementRef)CFRetain(element);
+	c.pid = pid;
+	c.frame = frame;
+	c.monitor = [self monitorAt:CGPointMake(frame.x + frame.w / 2, frame.y + frame.h / 2)];
+	c.tags = c.monitor.tags;
+	Boolean resizable = false;
+	AXUIElementIsAttributeSettable(element, kAXSizeAttribute, &resizable);
+	NSString *subrole = attribute(element, kAXSubroleAttribute);
+	c.floating = !resizable || ![subrole isEqual:(__bridge NSString *)kAXStandardWindowSubrole];
+	NSString *title = attribute(element, kAXTitleAttribute) ?: @"";
+	for (size_t i = 0; i < LENGTH(rules); ++i) {
+		if (rules[i].bundle && ![app.bundleIdentifier isEqual:rules[i].bundle]) continue;
+		if (rules[i].title && ![title containsString:rules[i].title]) continue;
+		c.floating = rules[i].floating;
+		if (rules[i].monitor >= 0 && rules[i].monitor < (int)self.monitors.count) c.monitor = self.monitors[rules[i].monitor];
+		c.tags = (rules[i].tags & DWM_TAGMASK) ?: c.monitor.tags;
+	}
+	[c.monitor.clients insertObject:c atIndex:0];
+	[c.monitor.history insertObject:c atIndex:0];
+	ApplicationWatch *watch = self.watches[@(pid)];
+	if (watch.observer) AXObserverAddNotification(watch.observer, element, kAXUIElementDestroyedNotification, (__bridge void *)self);
+	return c;
+}
+
+- (BOOL)forget:(pid_t)pid except:(NSSet *)seen
+{
+	BOOL changed = NO;
+	for (Monitor *m in self.monitors) for (Client *c in [m.clients copy]) {
+		if (c.pid != pid || [seen containsObject:c]) continue;
+		[m.clients removeObject:c];
+		[m.history removeObject:c];
+		if (m.selected == c) m.selected = nil;
+		if (self.dragClient == c) self.dragClient = nil;
+		changed = YES;
+	}
+	return changed;
+}
+
+/* Reconciles the model with what macOS reports. Runs on notifications and
+ * every half second as a fallback for applications with poor AX support. */
 - (void)sync
 {
-	BOOL changed = self.dirty;
-	self.dirty = NO;
-	NSMutableSet *livePids = [NSMutableSet set];
+	self.syncPending = NO;
+	[self refreshWindows];
+	BOOL changed = NO;
+	Client *focused = nil;
+	NSMutableSet *live = [NSMutableSet set];
 	for (NSRunningApplication *app in NSWorkspace.sharedWorkspace.runningApplications) {
 		if (app.processIdentifier == getpid() || app.activationPolicy != NSApplicationActivationPolicyRegular) continue;
-		NSNumber *pid = @(app.processIdentifier);
-		[livePids addObject:pid];
-		[self watch:app];
-		ApplicationWatch *watch = self.watches[pid];
+		pid_t pid = app.processIdentifier;
+		[live addObject:@(pid)];
+		ApplicationWatch *watch = [self watch:app];
 		NSArray *windows = attribute(watch.element, kAXWindowsAttribute);
-		if (!windows) continue;
+		if (!windows) continue;   /* unresponsive: keep what we know */
+		id focusedWindow = app.active ? attribute(watch.element, kAXFocusedWindowAttribute) : nil;
 		NSMutableSet *seen = [NSMutableSet set];
 		for (id object in windows) {
 			AXUIElementRef element = (__bridge AXUIElementRef)object;
-			NSString *role = attribute(element, kAXRoleAttribute);
-			if (![role isEqual:(__bridge NSString *)kAXWindowRole]) continue;
-			Client *c = nil;
-			for (Monitor *m in self.monitors) for (Client *candidate in m.clients)
-				if (candidate.pid == app.processIdentifier && CFEqual(candidate.element, element)) c = candidate;
+			if (![attribute(element, kAXRoleAttribute) isEqual:(__bridge NSString *)kAXWindowRole]) continue;
+			Client *c = [self clientFor:element pid:pid];
+			DwmRect frame = geometry(element);
+			BOOL onscreen = [self onscreen:pid frame:frame];
 			if (!c) {
-				DwmRect frame = geometry(element);
-				if (frame.w <= 0 || frame.h <= 0) continue;
-				c = [Client new]; c.element = (AXUIElementRef)CFRetain(element); c.pid = app.processIdentifier;
-				c.monitor = [self monitorAt:CGPointMake(frame.x + frame.w/2, frame.y + frame.h/2)];
-				c.tags = c.monitor.tags;
-				NSString *subrole = attribute(element, kAXSubroleAttribute);
-				c.floating = ![subrole isEqual:(__bridge NSString *)kAXStandardWindowSubrole];
-				Boolean resizable = false;
-				AXUIElementIsAttributeSettable(element, kAXSizeAttribute, &resizable);
-				c.floating |= !resizable;
-				NSString *title = attribute(element, kAXTitleAttribute) ?: @"";
-				for (size_t i = 0; i < sizeof(rules)/sizeof(rules[0]); ++i) {
-					if (rules[i].bundle && ![app.bundleIdentifier isEqual:rules[i].bundle]) continue;
-					if (rules[i].title && ![title containsString:rules[i].title]) continue;
-					c.floating = rules[i].floating;
-					if (rules[i].monitor >= 0 && rules[i].monitor < (int)self.monitors.count) c.monitor = self.monitors[rules[i].monitor];
-					c.tags = (rules[i].tags & DWM_TAGMASK) ?: c.monitor.tags;
-				}
-				[c.monitor.clients insertObject:c atIndex:0]; [c.monitor.history insertObject:c atIndex:0];
-				if (watch.observer) for (NSString *name in @[(__bridge NSString *)kAXUIElementDestroyedNotification, (__bridge NSString *)kAXWindowMiniaturizedNotification, (__bridge NSString *)kAXWindowDeminiaturizedNotification, (__bridge NSString *)kAXTitleChangedNotification])
-					AXObserverAddNotification(watch.observer, element, (__bridge CFStringRef)name, (__bridge void *)self);
+				/* manage windows when they appear on the current Space */
+				if (frame.w <= 0 || frame.h <= 0 || !onscreen) continue;
+				c = [self manage:element pid:pid app:app frame:frame];
 				changed = YES;
 			}
 			[seen addObject:c];
 			c.title = attribute(element, kAXTitleAttribute) ?: app.localizedName ?: @"";
-			BOOL minimized = [attribute(element, kAXMinimizedAttribute) boolValue];
 			BOOL nativeFullscreen = [attribute(element, CFSTR("AXFullScreen")) boolValue];
-			if (c.hidden && !minimized) { c.hidden = NO; changed = YES; }
-			BOOL userMinimized = minimized && !c.hidden;
-			if (c.minimized != userMinimized || c.nativeFullscreen != nativeFullscreen) changed = YES;
-			c.minimized = userMinimized; c.nativeFullscreen = nativeFullscreen;
+			BOOL away = app.hidden || [attribute(element, kAXMinimizedAttribute) boolValue] || (!c.hidden && !onscreen);
+			if (c.away != away || c.nativeFullscreen != nativeFullscreen) changed = YES;
+			c.away = away;
+			c.nativeFullscreen = nativeFullscreen;
+			if (!c.hidden && !away) c.frame = frame;   /* follow moves the user made */
+			if (focusedWindow && CFEqual(element, (__bridge CFTypeRef)focusedWindow)) focused = c;
 		}
-		for (Monitor *m in self.monitors) for (Client *c in [m.clients copy])
-			if (c.pid == app.processIdentifier && ![seen containsObject:c]) { [m.clients removeObject:c]; [m.history removeObject:c]; changed = YES; }
-		if (app.active) {
-			id focused = attribute(watch.element, kAXFocusedWindowAttribute);
-			for (Client *c in seen) if (focused && CFEqual(c.element, (__bridge CFTypeRef)focused) && (c.tags & c.monitor.tags) && !c.minimized) {
-				self.selected = c.monitor; c.monitor.selected = c;
-				[c.monitor.history removeObject:c]; [c.monitor.history insertObject:c atIndex:0];
-			}
-		}
+		if ([self forget:pid except:seen]) changed = YES;
 	}
-	for (NSNumber *pid in [self.watches.allKeys copy]) if (![livePids containsObject:pid]) {
+	for (NSNumber *pid in self.watches.allKeys) if (![live containsObject:pid]) {
 		[self.watches removeObjectForKey:pid];
-		for (Monitor *m in self.monitors) for (Client *c in [m.clients copy])
-			if (c.pid == pid.intValue) { [m.clients removeObject:c]; [m.history removeObject:c]; changed = YES; }
+		if ([self forget:pid.intValue except:nil]) changed = YES;
+	}
+	/* Follow focus changes made outside dwm: clicks, Cmd-Tab, the Dock. When the
+	 * user reaches a window on a hidden tag this way, view that tag. */
+	if (focused != self.osFocused) {
+		self.osFocused = focused;
+		Monitor *m = focused.monitor;
+		if (m && !focused.away && !focused.nativeFullscreen) {
+			if (!(focused.tags & m.tags) && !self.dragClient) { m.previousTags = m.tags; m.tags = focused.tags; changed = YES; }
+			self.selected = m;
+			m.selected = focused;
+			[m.history removeObject:focused];
+			[m.history insertObject:focused atIndex:0];
+		}
 	}
 	if (changed && !self.dragClient) [self arrange];
 	for (Monitor *m in self.monitors) [m.panel.contentView setNeedsDisplay:YES];
@@ -354,71 +520,113 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 		}
 		close(fd);
 	}
-	self.status = data ? ([[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"dwm") : @"dwm";
+	NSString *status = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : nil;
+	self.status = [status stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"dwm";
 	[self sync];
 }
 
 - (void)resize:(Client *)c frame:(DwmRect)r
 {
-	if (c.nativeFullscreen) return;
-	DwmRect old = geometry(c.element);
-	if (fabs(old.x-r.x)<1 && fabs(old.y-r.y)<1 && fabs(old.w-r.w)<1 && fabs(old.h-r.h)<1) return;
-	CGPoint p = CGPointMake(round(r.x), round(r.y));
-	CGSize s = CGSizeMake(MAX(1, round(r.w)), MAX(1, round(r.h)));
-	id position = CFBridgingRelease(AXValueCreate(kAXValueCGPointType, &p));
-	id size = CFBridgingRelease(AXValueCreate(kAXValueCGSizeType, &s));
-	BOOL ok = setAttribute(c.element, kAXSizeAttribute, size);
-	ok = setAttribute(c.element, kAXPositionAttribute, position) && ok;
-	if (!ok && !c.geometryFailed) NSLog(@"Application refused window geometry: %@", c.title);
+	if (!c || c.nativeFullscreen) return;
+	r.x = round(r.x); r.y = round(r.y);
+	r.w = MAX(1, round(r.w)); r.h = MAX(1, round(r.h));
+	if (c.hidden) { c.frame = r; return; }   /* applied when the window is shown */
+	if (fabs(c.frame.x - r.x) < 1 && fabs(c.frame.y - r.y) < 1 && fabs(c.frame.w - r.w) < 1 && fabs(c.frame.h - r.h) < 1) return;
+	BOOL ok = setSize(c.element, CGSizeMake(r.w, r.h));
+	ok = setPosition(c.element, CGPointMake(r.x, r.y)) && ok;
+	if (!ok && !c.geometryFailed) NSLog(@"Window refused geometry: %@", c.title);
 	c.geometryFailed = !ok;
+	c.frame = r;
+}
+
+/* hidden tags: park the window one point inside the display's bottom-right corner */
+- (void)park:(Client *)c
+{
+	if (c.hidden) return;
+	DwmRect f = c.monitor.frame;
+	c.hidden = setPosition(c.element, CGPointMake(f.x + f.w - 1, f.y + f.h - 1));
+	if (!c.hidden && !c.geometryFailed) NSLog(@"Window refused to hide: %@", c.title);
+	c.geometryFailed = !c.hidden;
+}
+
+- (void)unpark:(Client *)c
+{
+	if (!c.hidden) return;
+	c.hidden = NO;
+	setSize(c.element, CGSizeMake(c.frame.w, c.frame.h));
+	setPosition(c.element, CGPointMake(c.frame.x, c.frame.y));
+}
+
+- (void)move:(Client *)c to:(Monitor *)target relocate:(BOOL)relocate
+{
+	Monitor *source = c.monitor;
+	if (source == target) return;
+	[source.clients removeObject:c];
+	[source.history removeObject:c];
+	if (source.selected == c) source.selected = nil;
+	c.monitor = target;
+	[target.clients insertObject:c atIndex:0];
+	[target.history insertObject:c atIndex:0];
+	if (relocate && c.floating && !c.fullscreen) {
+		DwmRect r = c.frame;
+		r.x = target.work.x;
+		r.y = target.work.y + (target.showbar && topBar ? barHeight : 0);
+		[self resize:c frame:r];
+	}
 }
 
 - (void)arrange
 {
-	CGFloat top = NSMaxY(NSScreen.screens.firstObject.frame);
 	for (Monitor *m in self.monitors) {
 		DwmRect area = m.work;
-		CGFloat barY = topBar ? area.y : area.y + area.h - barHeight;
-		[m.panel setFrame:NSMakeRect(area.x, top-barY-barHeight, area.w, barHeight) display:YES];
-		BOOL fullscreen = NO;
-		for (Client *c in [self visible:m tiled:NO]) fullscreen |= c.fullscreen;
-		if (m.showbar) { if (fullscreen) [m.panel orderOut:nil]; else [m.panel orderFrontRegardless]; area.h -= barHeight; if (topBar) area.y += barHeight; }
-		else [m.panel orderOut:nil];
+		BOOL covered = NO;
+		for (Client *c in m.clients) if (!c.away && ((c.fullscreen && (c.tags & m.tags)) || c.nativeFullscreen)) covered = YES;
+		if (m.showbar && !covered) {
+			CGFloat barY = topBar ? area.y : area.y + area.h - barHeight;
+			[m.panel setFrame:NSMakeRect(area.x, self.top - barY - barHeight, area.w, barHeight) display:YES];
+			[m.panel orderFrontRegardless];
+		} else [m.panel orderOut:nil];
+		if (m.showbar) { area.h -= barHeight; if (topBar) area.y += barHeight; }
 		for (Client *c in m.clients) {
-			BOOL hide = !(c.tags & m.tags);
-			if (c.nativeFullscreen) continue;
-			if (hide && !c.hidden && !c.minimized) {
-				c.hidden = setAttribute(c.element, kAXMinimizedAttribute, @YES);
-				if (!c.hidden && !c.visibilityFailed) NSLog(@"Cannot hide %@; this window does not support native tags", c.title);
-				c.visibilityFailed = !c.hidden;
-			} else if (!hide && c.hidden && setAttribute(c.element, kAXMinimizedAttribute, @NO)) c.hidden = NO;
+			if (c.away || c.nativeFullscreen) continue;
+			if (c.tags & m.tags) [self unpark:c]; else [self park:c];
 		}
 		NSArray<Client *> *tiled = [self visible:m tiled:YES];
 		for (NSUInteger i = 0; i < tiled.count; ++i) {
-			if (m.layout == 0) [self resize:tiled[i] frame:dwm_tile(area, i, tiled.count, m.masters, m.factor)];
-			else if (m.layout == 2) [self resize:tiled[i] frame:area];
+			if (m.layout == Tile) [self resize:tiled[i] frame:dwm_tile(area, i, tiled.count, m.masters, m.factor)];
+			else if (m.layout == Monocle) [self resize:tiled[i] frame:area];
 		}
-		for (Client *c in [self visible:m tiled:NO]) if (c.fullscreen) [self resize:c frame:m.frame];
-		if (![[self visible:m tiled:NO] containsObject:m.selected]) {
+		for (Client *c in [self visible:m tiled:NO]) if (c.fullscreen) [self resize:c frame:m.work];
+		if (![self isVisible:m.selected] || m.selected.monitor != m) {
 			m.selected = nil;
-			for (Client *c in m.history) if ([[self visible:m tiled:NO] containsObject:c]) { m.selected = c; break; }
+			for (Client *c in m.history) if ([self isVisible:c]) { m.selected = c; break; }
 		}
 		[m.panel.contentView setNeedsDisplay:YES];
 	}
+	/* windows just moved under a resting pointer must not steal focus (dwm drains EnterNotify) */
+	self.quietUntil = [NSDate timeIntervalSinceReferenceDate] + 0.3;
 }
 
-- (void)focus:(Client *)c
+- (void)focus:(Client *)c raise:(BOOL)raise
 {
-	if (!c || c.hidden || c.minimized || c.nativeFullscreen) return;
+	if (![self isVisible:c]) return;
 	Client *current = self.selected.selected;
-	if (lockFullscreen && current.fullscreen && current != c && current.monitor == c.monitor && (current.tags & current.monitor.tags)) return;
-	self.selected = c.monitor; c.monitor.selected = c;
-	[c.monitor.history removeObject:c]; [c.monitor.history insertObject:c atIndex:0];
-	NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:c.pid];
-	[app activateWithOptions:NSApplicationActivateIgnoringOtherApps];
-	ApplicationWatch *watch = self.watches[@(c.pid)];
-	setAttribute(watch.element, kAXFocusedWindowAttribute, (__bridge id)c.element);
-	AXUIElementPerformAction(c.element, kAXRaiseAction);
+	if (lockFullscreen && current && current != c && current.fullscreen && current.monitor == c.monitor && [self isVisible:current]) return;
+	self.selected = c.monitor;
+	c.monitor.selected = c;
+	[c.monitor.history removeObject:c];
+	[c.monitor.history insertObject:c atIndex:0];
+	for (Monitor *m in self.monitors) [m.panel.contentView setNeedsDisplay:YES];
+	/* raise the window inside its application first so activation brings this one forward */
+	if (raise) {
+		setAttribute(c.element, kAXMainAttribute, @YES);
+		AXUIElementPerformAction(c.element, kAXRaiseAction);
+	}
+	if (self.osFocused != c) {
+		setAttribute(self.watches[@(c.pid)].element, kAXFocusedWindowAttribute, (__bridge id)c.element);
+		NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:c.pid];
+		if (!app.active) [app activateWithOptions:NSApplicationActivateIgnoringOtherApps];
+	}
 }
 
 - (void)spawn:(NSString *)command
@@ -427,7 +635,7 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 	task.executableURL = [NSURL fileURLWithPath:@"/bin/sh"];
 	task.arguments = @[@"-c", command];
 	NSError *error = nil;
-	if (![task launchAndReturnError:&error]) NSLog(@"Cannot launch command: %@", error);
+	if (![task launchAndReturnError:&error]) NSLog(@"Cannot run %@: %@", command, error);
 }
 
 - (void)action:(NSString *)name value:(int)value
@@ -440,18 +648,20 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 	if ([name isEqual:@"view"]) {
 		unsigned next = value ? ((unsigned)value & DWM_TAGMASK) : m.previousTags;
 		if (next && next != m.tags) { m.previousTags = m.tags; m.tags = next; }
-	} else if ([name isEqual:@"toggleview"]) m.tags = dwm_tags(m.tags, (unsigned)value, 1);
-	else if ([name isEqual:@"tag"] && c) c.tags = dwm_tags(c.tags, (unsigned)value, 0);
+	} else if ([name isEqual:@"toggleview"]) {
+		unsigned next = dwm_tags(m.tags, (unsigned)value, 1);
+		if (next != m.tags) { m.previousTags = m.tags; m.tags = next; }
+	} else if ([name isEqual:@"tag"] && c) c.tags = dwm_tags(c.tags, (unsigned)value, 0);
 	else if ([name isEqual:@"toggletag"] && c) c.tags = dwm_tags(c.tags, (unsigned)value, 1);
 	else if ([name isEqual:@"togglebar"]) m.showbar = !m.showbar;
 	else if ([name isEqual:@"incnmaster"]) m.masters = MAX(0, m.masters + value);
 	else if ([name isEqual:@"setmfact"]) m.factor = MAX(0.05, MIN(0.95, m.factor + value * 0.05));
 	else if ([name isEqual:@"setlayout"]) {
-		int next = value < 0 ? m.previousLayout : value;
+		int next = value < 0 ? m.previousLayout : MIN(value, Monocle);
 		if (next != m.layout) { m.previousLayout = m.layout; m.layout = next; }
 	} else if ([name isEqual:@"togglefloating"] && c && !c.fullscreen) c.floating = !c.floating;
 	else if ([name isEqual:@"togglefullscr"] && c && !c.nativeFullscreen) {
-		if (!c.fullscreen) { c.saved = geometry(c.element); c.wasFloating = c.floating; c.fullscreen = YES; c.floating = YES; }
+		if (!c.fullscreen) { c.saved = c.frame; c.wasFloating = c.floating; c.fullscreen = YES; c.floating = YES; }
 		else { c.fullscreen = NO; c.floating = c.wasFloating; [self resize:c frame:c.saved]; }
 	} else if ([name isEqual:@"killclient"] && c) {
 		id close = attribute(c.element, kAXCloseButtonAttribute);
@@ -461,40 +671,45 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 		if (visible.count) {
 			NSUInteger index = [visible indexOfObject:c];
 			int next = index == NSNotFound ? 0 : dwm_monitor((int)index, value, (int)visible.count);
-			[self focus:visible[next]];
+			[self focus:visible[next] raise:YES];
 		}
-	} else if ([name isEqual:@"zoom"] && c && m.layout != 1 && !c.floating && !c.fullscreen) {
+	} else if ([name isEqual:@"zoom"] && c && m.layout != Float && !c.floating && !c.fullscreen) {
 		NSArray *tiled = [self visible:m tiled:YES];
 		Client *target = c == tiled.firstObject && tiled.count > 1 ? tiled[1] : c;
-		[m.clients removeObject:target]; [m.clients insertObject:target atIndex:0]; [self focus:target];
+		[m.clients removeObject:target];
+		[m.clients insertObject:target atIndex:0];
+		m.selected = target;
 	} else if ([name isEqual:@"focusmon"] || [name isEqual:@"tagmon"]) {
 		Monitor *target = self.monitors[dwm_monitor((int)[self.monitors indexOfObject:m], value, (int)self.monitors.count)];
 		if ([name isEqual:@"tagmon"] && c && target != m) {
-			[m.clients removeObject:c]; [m.history removeObject:c];
-			c.monitor = target; c.tags = target.tags;
-			[target.clients insertObject:c atIndex:0]; [target.history insertObject:c atIndex:0];
-			if (c.floating && !c.fullscreen) { DwmRect r = geometry(c.element); r.x = target.work.x; r.y = target.work.y + barHeight; [self resize:c frame:r]; }
+			[self move:c to:target relocate:YES];
+			c.tags = target.tags;
 			target.selected = c;
 		}
 		self.selected = target;
 	}
 	[self arrange];
-	[self focus:self.selected.selected];
+	Client *selected = self.selected.selected;
+	if (selected) [self focus:selected raise:YES];
+	else if (self.osFocused && ![self isVisible:self.osFocused]) [NSApp activateIgnoringOtherApps:YES];   /* keys must not reach a hidden window */
 }
 
-- (Client *)clientAt:(CGPoint)p
+/* sloppy focus, coalesced to one hit test per run loop pass */
+- (void)hover
 {
-	AXUIElementRef system = AXUIElementCreateSystemWide(), element = NULL;
-	AXError error = AXUIElementCopyElementAtPosition(system, p.x, p.y, &element);
-	CFRelease(system);
-	if (error != kAXErrorSuccess || !element) return nil;
-	id window = attribute(element, kAXWindowAttribute);
-	if (!window && [attribute(element, kAXRoleAttribute) isEqual:(__bridge NSString *)kAXWindowRole]) window = (__bridge id)element;
-	Client *found = nil;
-	for (Monitor *m in self.monitors) for (Client *c in [self visible:m tiled:NO])
-		if (window && CFEqual(c.element, (__bridge CFTypeRef)window)) found = c;
-	CFRelease(element);
-	return found;
+	Client *c = [self clientAt:self.pointer];
+	if (c == self.hovered) return;
+	self.hovered = c;
+	if ([NSDate timeIntervalSinceReferenceDate] < self.quietUntil) return;
+	if (c) {
+		if (c != self.selected.selected) [self focus:c raise:NO];
+		return;
+	}
+	Monitor *m = [self monitorAt:self.pointer];
+	if (m == self.selected) return;
+	self.selected = m;
+	[self focus:m.selected raise:NO];
+	for (Monitor *each in self.monitors) [each.panel.contentView setNeedsDisplay:YES];
 }
 
 - (CGEventRef)event:(CGEventRef)event type:(CGEventType)type
@@ -506,10 +721,11 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 			if ([self.heldKeys containsIndex:code]) { [self.heldKeys removeIndex:code]; return NULL; }
 			return event;
 		}
-		for (size_t i = 0; i < sizeof(keys)/sizeof(keys[0]); ++i) if (keys[i].code == code && keys[i].modifiers == flags) {
+		for (size_t i = 0; i < LENGTH(keys); ++i) if (keys[i].code == code && keys[i].modifiers == flags) {
 			[self.heldKeys addIndex:code];
-			NSString *action = keys[i].action; int value = keys[i].value;
-			dispatch_async(dispatch_get_main_queue(), ^{ [self action:action value:value]; });
+			NSString *action = keys[i].action;
+			int value = keys[i].value;
+			dispatch_async(dispatch_get_main_queue(), ^{ if (!self.stopping) [self action:action value:value]; });
 			return NULL;
 		}
 		return event;
@@ -521,10 +737,7 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 			self.pointerPending = YES;
 			dispatch_async(dispatch_get_main_queue(), ^{
 				self.pointerPending = NO;
-				if (self.stopping || self.dragClient) return;
-				self.selected = [self monitorAt:self.pointer];
-				Client *c = [self clientAt:self.pointer];
-				if (c != self.hovered) { self.hovered = c; [self focus:c]; }
+				if (!self.stopping && !self.dragClient) [self hover];
 			});
 		}
 		return event;
@@ -532,41 +745,48 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 	BOOL down = type == kCGEventLeftMouseDown || type == kCGEventRightMouseDown || type == kCGEventOtherMouseDown;
 	BOOL up = type == kCGEventLeftMouseUp || type == kCGEventRightMouseUp || type == kCGEventOtherMouseUp;
 	int button = (int)CGEventGetIntegerValueField(event, kCGMouseEventButtonNumber);
-	if (down && flags == ALT && button <= 2) {
+	if (down && flags == ALT && button <= 2 && !self.dragClient) {
+		[self refreshWindows];
 		Client *c = [self clientAt:p];
-		if (!c || c.fullscreen || c.nativeFullscreen) return event;
-		[self focus:c];
-		self.dragClient = c; self.dragButton = button; self.dragStart = p; self.dragFrame = geometry(c.element);
-		if (button == 2) [self action:@"togglefloating" value:0];
+		if (!c || c.fullscreen) return event;
+		[self focus:c raise:YES];
+		if (button == 2) { [self action:@"togglefloating" value:0]; return NULL; }
+		self.dragClient = c;
+		self.dragButton = button;
+		self.dragStart = p;
+		self.dragFrame = c.frame;
 		return NULL;
 	}
-	if (!self.dragClient) return event;
-	if (up && button == self.dragButton) {
+	if (up && self.dragClient && button == self.dragButton) {
 		Client *c = self.dragClient;
-		DwmRect r = geometry(c.element);
-		Monitor *target = [self monitorAt:CGPointMake(r.x+r.w/2, r.y+r.h/2)];
-		if (target != c.monitor) {
-			[c.monitor.clients removeObject:c]; [c.monitor.history removeObject:c];
-			c.monitor = target; c.tags = target.tags; [target.clients insertObject:c atIndex:0]; [target.history insertObject:c atIndex:0];
-		}
-		self.dragClient = nil; [self arrange]; [self focus:c]; return NULL;
+		self.dragClient = nil;
+		Monitor *target = [self monitorAt:CGPointMake(c.frame.x + c.frame.w / 2, c.frame.y + c.frame.h / 2)];
+		if (target != c.monitor) { [self move:c to:target relocate:NO]; c.tags = target.tags; }
+		[self arrange];
+		[self focus:c raise:YES];
+		return NULL;
 	}
-	if (type == kCGEventLeftMouseDragged || type == kCGEventRightMouseDragged) {
-		DwmRect r = self.dragFrame;
-		double dx = p.x-self.dragStart.x, dy = p.y-self.dragStart.y;
+	if ((type == kCGEventLeftMouseDragged || type == kCGEventRightMouseDragged) && self.dragClient) {
 		Client *c = self.dragClient;
-		if (!c.floating && c.monitor.layout != 1 && fabs(dx) < snapDistance && fabs(dy) < snapDistance) return NULL;
+		DwmRect r = self.dragFrame;
+		double dx = p.x - self.dragStart.x, dy = p.y - self.dragStart.y;
+		if (!c.floating && c.monitor.layout != Float && fabs(dx) < snapDistance && fabs(dy) < snapDistance) return NULL;
 		c.floating = YES;
 		if (self.dragButton == 0) {
+			Monitor *target = [self monitorAt:p];
+			DwmRect a = target.work;
+			if (target.showbar) { a.h -= barHeight; if (topBar) a.y += barHeight; }
 			r.x += dx; r.y += dy;
-			DwmRect a = [self monitorAt:p].work;
-			if (c.monitor.showbar) { a.h -= barHeight; if (topBar) a.y += barHeight; }
-			if (fabs(r.x-a.x) < snapDistance) r.x = a.x;
-			if (fabs(r.y-a.y) < snapDistance) r.y = a.y;
-			if (fabs(r.x+r.w-a.x-a.w) < snapDistance) r.x = a.x+a.w-r.w;
-			if (fabs(r.y+r.h-a.y-a.h) < snapDistance) r.y = a.y+a.h-r.h;
-		} else if (self.dragButton == 1) { r.w = MAX(1, r.w+dx); r.h = MAX(1, r.h+dy); }
-		[self resize:c frame:r]; return NULL;
+			if (fabs(r.x - a.x) < snapDistance) r.x = a.x;
+			if (fabs(r.y - a.y) < snapDistance) r.y = a.y;
+			if (fabs(r.x + r.w - a.x - a.w) < snapDistance) r.x = a.x + a.w - r.w;
+			if (fabs(r.y + r.h - a.y - a.h) < snapDistance) r.y = a.y + a.h - r.h;
+		} else {
+			r.w = MAX(1, r.w + dx);
+			r.h = MAX(1, r.h + dy);
+		}
+		[self resize:c frame:r];
+		return NULL;
 	}
 	return event;
 }
@@ -576,17 +796,20 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 	(void)notification;
 	self.stopping = YES;
 	[self.timer invalidate];
+	[NSObject cancelPreviousPerformRequestsWithTarget:self];
 	[[NSNotificationCenter defaultCenter] removeObserver:self];
+	[NSWorkspace.sharedWorkspace.notificationCenter removeObserver:self];
 	if (self.tap) { CGEventTapEnable(self.tap, false); CFMachPortInvalidate(self.tap); CFRelease(self.tap); self.tap = NULL; }
 	if (self.tapSource) { CFRunLoopRemoveSource(CFRunLoopGetMain(), self.tapSource, kCFRunLoopCommonModes); CFRelease(self.tapSource); self.tapSource = NULL; }
 	for (Monitor *m in self.monitors) {
 		for (Client *c in m.clients) {
-			if (c.hidden) setAttribute(c.element, kAXMinimizedAttribute, @NO);
-			if (c.fullscreen) [self resize:c frame:c.saved];
+			if (c.fullscreen) { c.fullscreen = NO; [self resize:c frame:c.saved]; }
+			[self unpark:c];
 		}
 		[m.panel close];
 	}
 	[self.watches removeAllObjects];
+	if (self.systemElement) { CFRelease(self.systemElement); self.systemElement = NULL; }
 	if (self.interruptSource) dispatch_source_cancel(self.interruptSource);
 	if (self.terminateSource) dispatch_source_cancel(self.terminateSource);
 	if (self.lockFD >= 0) close(self.lockFD);
@@ -596,45 +819,101 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 @implementation Bar
 - (BOOL)isFlipped { return YES; }
 - (BOOL)acceptsFirstMouse:(NSEvent *)event { (void)event; return YES; }
+
+static NSFont *barFont(void)
+{
+	return [NSFont monospacedSystemFontOfSize:fontSize weight:NSFontWeightRegular];
+}
+
+/* text width plus padding, like dwm's TEXTW */
+- (CGFloat)width:(NSString *)text
+{
+	return ceil([text sizeWithAttributes:@{NSFontAttributeName: barFont()}].width) + fontSize;
+}
+
+- (NSString *)symbol
+{
+	Monitor *m = self.monitor;
+	if (m.layout != Monocle) return layoutNames[m.layout];
+	return [NSString stringWithFormat:@"[%lu]", (unsigned long)[self.manager visible:m tiled:YES].count];
+}
+
+- (void)drawText:(NSString *)text x:(CGFloat)x width:(CGFloat)w selected:(BOOL)selected
+{
+	[color(selected ? colSelBG : colNormBG) setFill];
+	NSRectFill(NSMakeRect(x, 0, w, barHeight));
+	NSFont *font = barFont();
+	NSMutableParagraphStyle *style = [NSMutableParagraphStyle new];
+	style.lineBreakMode = NSLineBreakByTruncatingTail;
+	NSDictionary *attributes = @{NSFontAttributeName: font, NSForegroundColorAttributeName: color(selected ? colSelFG : colNormFG), NSParagraphStyleAttributeName: style};
+	CGFloat y = floor((barHeight - (font.ascender - font.descender)) / 2);
+	[text drawInRect:NSMakeRect(x + fontSize / 2, y, MAX(0, w - fontSize), barHeight - y) withAttributes:attributes];
+}
+
 - (void)drawRect:(NSRect)dirtyRect
 {
 	(void)dirtyRect;
 	Monitor *m = self.monitor;
-	[[NSColor colorWithWhite:0.13 alpha:1] setFill]; NSRectFill(self.bounds);
-	NSDictionary *attributes = @{NSFontAttributeName: [NSFont monospacedSystemFontOfSize:14 weight:NSFontWeightRegular], NSForegroundColorAttributeName: [NSColor colorWithWhite:0.85 alpha:1]};
+	Manager *manager = self.manager;
+	CGFloat w = self.bounds.size.width, x = 0, box = floor(fontSize / 3);
+	[color(colNormBG) setFill];
+	NSRectFill(self.bounds);
 	unsigned occupied = 0;
 	for (Client *c in m.clients) occupied |= c.tags;
-	for (int i = 0; i < 5; ++i) {
-		if (m.tags & (1u << i)) { [[NSColor colorWithRed:0 green:0.33 blue:0.47 alpha:1] setFill]; NSRectFill(NSMakeRect(i*30, 0, 30, barHeight)); }
-		[tagNames[i] drawAtPoint:NSMakePoint(i*30+10, 3) withAttributes:attributes];
+	for (size_t i = 0; i < LENGTH(tagNames); ++i) {
+		CGFloat tw = [self width:tagNames[i]];
+		BOOL selected = (m.tags & (1u << i)) != 0;
+		[self drawText:tagNames[i] x:x width:tw selected:selected];
 		if (occupied & (1u << i)) {
-			[[NSColor whiteColor] setFill];
-			NSRect mark = NSMakeRect(i*30+3, 2, 4, 4);
-			if (m.selected.tags & (1u << i)) NSRectFill(mark); else NSFrameRect(mark);
+			[color(selected ? colSelFG : colNormFG) setFill];
+			NSRect mark = NSMakeRect(x + 2, 2, box, box);
+			if (m == manager.selected && m.selected && (m.selected.tags & (1u << i))) NSRectFill(mark); else NSFrameRect(mark);
+		}
+		x += tw;
+	}
+	NSString *symbol = self.symbol;
+	CGFloat lw = [self width:symbol];
+	[self drawText:symbol x:x width:lw selected:NO];
+	x += lw;
+	CGFloat sw = 0;
+	if (m == manager.selected) {
+		sw = MIN([self width:manager.status], MAX(0, w - x));
+		[self drawText:manager.status x:w - sw width:sw selected:NO];
+	}
+	if (w - sw > x) {
+		Client *c = m.selected;
+		if (c) {
+			[self drawText:c.title x:x width:w - sw - x selected:m == manager.selected];
+			if (c.floating) { [color(m == manager.selected ? colSelFG : colNormFG) setFill]; NSFrameRect(NSMakeRect(x + 2, 2, box, box)); }
 		}
 	}
-	NSString *layout = m.layout == 2 ? [NSString stringWithFormat:@"[%lu]", (unsigned long)[self.manager visible:m tiled:NO].count] : layoutNames[m.layout];
-	[layout drawAtPoint:NSMakePoint(155, 3) withAttributes:attributes];
-	NSString *status = m == self.manager.selected ? self.manager.status : @"";
-	CGFloat statusWidth = MIN([status sizeWithAttributes:attributes].width+12, MAX(0, self.bounds.size.width/3));
-	[status drawInRect:NSMakeRect(self.bounds.size.width-statusWidth+6, 3, statusWidth-6, barHeight-3) withAttributes:attributes];
-	NSString *title = [NSString stringWithFormat:@"%@%@", m.selected.fullscreen ? @"[F] " : m.selected.floating ? @"[~] " : @"", m.selected.title ?: @""];
-	[title drawInRect:NSMakeRect(205, 3, MAX(0, self.bounds.size.width-statusWidth-210), barHeight-3) withAttributes:attributes];
 }
+
 - (void)click:(NSEvent *)event
 {
-	self.manager.selected = self.monitor;
-	CGFloat x = [self convertPoint:event.locationInWindow fromView:nil].x;
+	Manager *manager = self.manager;
+	Monitor *m = self.monitor;
+	if (manager.selected != m) { manager.selected = m; [manager action:@"focusmon" value:0]; }
+	CGFloat x = [self convertPoint:event.locationInWindow fromView:nil].x, w = self.bounds.size.width, edge = 0;
 	BOOL alt = (event.modifierFlags & NSEventModifierFlagOption) != 0;
-	BOOL right = event.buttonNumber == 1;
-	BOOL middle = event.buttonNumber == 2;
-	if (x < 150 && !middle) [self.manager action:alt ? (right ? @"toggletag" : @"tag") : (right ? @"toggleview" : @"view") value:1 << (int)(x/30)];
-	else if (x < 205 && !middle) [self.manager action:@"setlayout" value:right ? 2 : -1];
-	else if (middle) {
-		CGFloat width = MIN([self.manager.status sizeWithAttributes:@{NSFontAttributeName:[NSFont monospacedSystemFontOfSize:14 weight:NSFontWeightRegular]}].width+12, self.bounds.size.width/3);
-		[self.manager action:x >= self.bounds.size.width-width ? @"spawn" : @"zoom" value:1];
+	BOOL right = event.buttonNumber == 1, middle = event.buttonNumber == 2;
+	for (size_t i = 0; i < LENGTH(tagNames); ++i) {
+		edge += [self width:tagNames[i]];
+		if (x < edge) {
+			if (!middle) [manager action:alt ? (right ? @"toggletag" : @"tag") : (right ? @"toggleview" : @"view") value:(int)(1u << i)];
+			return;
+		}
 	}
+	edge += [self width:self.symbol];
+	if (x < edge) {
+		if (!middle) [manager action:@"setlayout" value:right ? Monocle : -1];
+		return;
+	}
+	if (!middle) return;
+	CGFloat sw = MIN([self width:manager.status], MAX(0, w - edge));
+	[manager action:x >= w - sw ? @"spawn" : @"zoom" value:1];
 }
+
 - (void)mouseDown:(NSEvent *)event { [self click:event]; }
 - (void)rightMouseDown:(NSEvent *)event { [self click:event]; }
 - (void)otherMouseDown:(NSEvent *)event { [self click:event]; }
@@ -648,6 +927,6 @@ int main(void)
 		__attribute__((objc_precise_lifetime)) Manager *manager = [Manager new];
 		app.delegate = manager;
 		[app run];
-		return 0;
 	}
+	return 0;
 }
