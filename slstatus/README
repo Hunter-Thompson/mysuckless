@@ -32,6 +32,10 @@ Features
 
 Requirements
 ------------
+On macOS 11+, make dispatches to a native backend with no X11 dependency.
+See ../macos/slstatus/README.md for build, configuration, and the dwm status-file protocol.
+The remaining instructions describe the original X11 backend.
+
 Currently slstatus works on FreeBSD, Linux and OpenBSD.
 In order to build slstatus you need the Xlib header files.
 

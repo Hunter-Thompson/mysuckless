@@ -2,6 +2,10 @@
 # slstatus - suckless status monitor
 .POSIX:
 
+ifeq ($(shell uname -s),Darwin)
+all install uninstall clean:
+	$(MAKE) -C ../macos/slstatus $@
+else
 include config.mk
 
 REQ = util
@@ -66,3 +70,9 @@ install: all
 uninstall:
 	rm -f "$(DESTDIR)$(PREFIX)/bin/slstatus"
 	rm -f "$(DESTDIR)$(MANPREFIX)/man1/slstatus.1"
+endif
+
+test-native:
+	$(MAKE) -C ../macos/slstatus test
+
+.PHONY: all install uninstall clean test-native

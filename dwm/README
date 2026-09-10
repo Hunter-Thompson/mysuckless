@@ -4,8 +4,8 @@ dwm is an extremely fast, small, and dynamic window manager for X.
 
 Native macOS backend
 --------------------
-On macOS, make builds the native backend in macos/ (no XQuartz). See
-macos/README.md. The instructions below describe the X11 backend.
+On macOS, make builds the native backend in ../macos/dwm/ (no XQuartz). See
+../macos/dwm/README.md. The instructions below describe the X11 backend.
 
 
 Requirements

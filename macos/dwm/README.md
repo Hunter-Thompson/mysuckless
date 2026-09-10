@@ -3,14 +3,14 @@
 A native backend for dwm that manages ordinary macOS application windows.
 It uses only public APIs: Accessibility to move and focus windows, a CoreGraphics
 event tap for keys and mouse, and AppKit for the bar. No XQuartz, no SIP changes,
-no injection into WindowServer. The X11 code in the parent directory is untouched.
+no injection into WindowServer. The X11 code in `dwm/` at the repository root is untouched.
 
 ## Build and run
 
 Requires macOS 11+ and the Xcode Command Line Tools (`xcode-select --install`).
 
     cd dwm
-    make                                # builds macos/dwm-macos on Darwin
+    make                                # builds ../macos/dwm/dwm-macos on Darwin
     make install PREFIX="$HOME/.local"
     "$HOME/.local/bin/dwm-macos"
 
@@ -61,7 +61,7 @@ it hid and leaves everything else where it is.
 ## Configuration
 
 Edit `config.h` and rebuild, as with dwm. Option replaces Mod1; key codes are
-physical ANSI positions. Defaults mirror `../config.h`: five tags, master factor
+physical ANSI positions. Defaults mirror `../../dwm/config.h`: five tags, master factor
 0.55, one master, tile/float/monocle, a 25-point top bar and the same colors.
 Rules match an exact bundle identifier and/or a title substring; monitors are
 zero-based in `NSScreen` order.

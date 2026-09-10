@@ -3,7 +3,7 @@
 
 ifeq ($(shell uname -s),Darwin)
 all install uninstall clean:
-	$(MAKE) -C macos $@
+	$(MAKE) -C ../macos/dwm $@
 else
 include config.mk
 
@@ -57,6 +57,6 @@ endif
 
 # portable tests of the layout model shared with the macOS backend
 test-native:
-	$(MAKE) -C macos test
+	$(MAKE) -C ../macos/dwm test
 
 .PHONY: test-native
