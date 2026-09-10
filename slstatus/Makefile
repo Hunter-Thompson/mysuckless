@@ -4,7 +4,7 @@
 
 ifeq ($(shell uname -s),Darwin)
 all install uninstall clean:
-	$(MAKE) -C macos $@
+	$(MAKE) -C ../macos/slstatus $@
 else
 include config.mk
 
@@ -73,6 +73,6 @@ uninstall:
 endif
 
 test-native:
-	$(MAKE) -C macos test
+	$(MAKE) -C ../macos/slstatus test
 
 .PHONY: all install uninstall clean test-native

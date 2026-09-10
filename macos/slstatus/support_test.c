@@ -1,4 +1,8 @@
 #define _POSIX_C_SOURCE 200809L
+#ifdef __APPLE__
+/* Darwin hides mkdtemp in its strict POSIX namespace. */
+#define _DARWIN_C_SOURCE
+#endif
 #include <assert.h>
 #include <dirent.h>
 #include <errno.h>

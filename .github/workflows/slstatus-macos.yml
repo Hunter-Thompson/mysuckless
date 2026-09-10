@@ -1,9 +1,9 @@
 name: slstatus native macOS
 on:
   push:
-    paths: ['slstatus/**', '.github/workflows/slstatus-macos.yml']
+    paths: ['slstatus/**', 'macos/slstatus/**', '.github/workflows/slstatus-macos.yml']
   pull_request:
-    paths: ['slstatus/**', '.github/workflows/slstatus-macos.yml']
+    paths: ['slstatus/**', 'macos/slstatus/**', '.github/workflows/slstatus-macos.yml']
 permissions:
   contents: read
 jobs:
@@ -19,7 +19,7 @@ jobs:
         run: make -C slstatus CFLAGS="$CFLAGS"
       - name: One-shot status
         run: |
-          slstatus/macos/slstatus-macos -1 > "$RUNNER_TEMP/status"
+          macos/slstatus/slstatus-macos -1 > "$RUNNER_TEMP/status"
           test -s "$RUNNER_TEMP/status"
           test "$(wc -l < "$RUNNER_TEMP/status" | tr -d ' ')" = 1
           grep 'BER ' "$RUNNER_TEMP/status"
@@ -33,7 +33,7 @@ jobs:
           import time
 
           path = pathlib.Path.home() / 'Library/Application Support/dwm/status'
-          process = subprocess.Popen(['slstatus/macos/slstatus-macos'])
+          process = subprocess.Popen(['macos/slstatus/slstatus-macos'])
           try:
               deadline = time.monotonic() + 15
               while not path.exists() and time.monotonic() < deadline:
@@ -58,4 +58,4 @@ jobs:
           make -C slstatus uninstall DESTDIR="$RUNNER_TEMP/slstatus-stage" PREFIX=/usr/local
           test ! -e "$RUNNER_TEMP/slstatus-stage/usr/local/bin/slstatus-macos"
       - name: Compile Intel backend
-        run: make -C slstatus/macos clean all CC='clang -arch x86_64' CFLAGS="$CFLAGS"
+        run: make -C macos/slstatus clean all CC='clang -arch x86_64' CFLAGS="$CFLAGS"

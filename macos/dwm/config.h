@@ -1,4 +1,4 @@
-/* Native macOS configuration. Mirrors ../config.h where the platform allows;
+/* Native macOS configuration. Mirrors ../../dwm/config.h where the platform allows;
  * key codes are physical ANSI positions and Option replaces Mod1. */
 
 /* appearance */

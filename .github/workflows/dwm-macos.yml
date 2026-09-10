@@ -1,9 +1,9 @@
 name: dwm native macOS
 on:
   push:
-    paths: ['dwm/**', '.github/workflows/dwm-macos.yml']
+    paths: ['dwm/**', 'macos/dwm/**', '.github/workflows/dwm-macos.yml']
   pull_request:
-    paths: ['dwm/**', '.github/workflows/dwm-macos.yml']
+    paths: ['dwm/**', 'macos/dwm/**', '.github/workflows/dwm-macos.yml']
 permissions:
   contents: read
 jobs:
@@ -18,6 +18,6 @@ jobs:
       - name: Native build
         run: make -C dwm CFLAGS="$CFLAGS"
       - name: Compile Intel backend
-        run: make -C dwm/macos clean all CC='clang -arch x86_64' CFLAGS="$CFLAGS"
+        run: make -C macos/dwm clean all CC='clang -arch x86_64' CFLAGS="$CFLAGS"
       - name: Stage installation
         run: make -C dwm install DESTDIR="$RUNNER_TEMP/dwm-stage" PREFIX=/usr/local

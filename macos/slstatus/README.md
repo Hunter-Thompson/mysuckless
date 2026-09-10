@@ -10,17 +10,17 @@ launcher; this backend makes no dmenu or dwm keybinding changes.
 Requires macOS 11+ and the Xcode Command Line Tools (`xcode-select --install`).
 
 ```sh
-make -C slstatus                         # Darwin: macos/slstatus-macos
+make -C slstatus                         # Darwin: macos/slstatus/slstatus-macos
 make -C slstatus install PREFIX="$HOME/.local"
 "$HOME/.local/bin/slstatus-macos"
 ```
 
-Alternatively build directly with `make -C slstatus/macos`. Only the binary
+Alternatively build directly with `make -C macos/slstatus`. Only the binary
 `slstatus-macos` is installed; the Linux executable/man page is not replaced.
 `PREFIX` defaults to `/usr/local`. Staging is supported with
-`make -C slstatus/macos install DESTDIR=/tmp/stage PREFIX=/usr/local`.
+`make -C macos/slstatus install DESTDIR=/tmp/stage PREFIX=/usr/local`.
 Use the same prefix with `make -C slstatus uninstall` to remove the binary.
-`make -C slstatus/macos clean` removes build/test binaries, not configuration.
+`make -C macos/slstatus clean` removes build/test binaries, not configuration.
 
 ## Usage
 
@@ -31,7 +31,7 @@ slstatus-macos -1    # print one line to stdout and exit (also accepts -s -1)
 ```
 
 Default output is `~/Library/Application Support/dwm/status`, exactly the path
-read by `dwm/macos/README.md`'s backend every half second (first 4 KiB, UTF-8).
+read by `macos/dwm/README.md`'s backend every half second (first 4 KiB, UTF-8).
 Parent directories are created as needed. Each update writes a unique mode-0600
 temporary file in the same directory, closes it, and renames it over `status`.
 Readers see a whole old or new line, never a partial update. This is atomic
@@ -50,7 +50,7 @@ startup; launch it from your session or your own LaunchAgent if desired.
 
 ## Compile-time configuration
 
-Edit **this directory's `config.h`**, then rebuild; the Linux `../config.h` is
+Edit **this directory's `config.h`**, then rebuild; the Linux `../../slstatus/config.h` is
 not used. Configure the positive update interval in milliseconds, unknown text,
 disk path, home-relative output path, date format, timezone names and status
 format. `status_format` takes eight Objective-C `%@` fields in this order: CPU,
@@ -95,7 +95,7 @@ the interface explicitly for VPNs or a secondary link whose traffic you want.
 ## Verification
 
 ```sh
-make -C slstatus/macos test CFLAGS='-O2 -Wall -Wextra -Werror'
+make -C macos/slstatus test CFLAGS='-O2 -Wall -Wextra -Werror'
 make -C slstatus test-native             # same portable tests
 ```
 
@@ -105,9 +105,9 @@ permissions, empty output, failed file creation/renames and temporary-file clean
 They do not simulate the macOS APIs. On a Mac, additionally run:
 
 ```sh
-make -C slstatus/macos CFLAGS='-O2 -Wall -Wextra -Werror'
-slstatus/macos/slstatus-macos -1
-slstatus/macos/slstatus-macos -s
+make -C macos/slstatus CFLAGS='-O2 -Wall -Wextra -Werror'
+macos/slstatus/slstatus-macos -1
+macos/slstatus/slstatus-macos -s
 ```
 
 The second continuous sample should show CPU/network rates when available.
