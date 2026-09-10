@@ -7,6 +7,8 @@ dwm/macos/dwm-macos
 dwm/macos/model-test
 dmenu/dmenu
 slstatus/slstatus
+slstatus/macos/slstatus-macos
+slstatus/macos/support-test
 dwmstatus/dwmstatus
 
 

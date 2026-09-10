@@ -1,0 +1,61 @@
+name: slstatus native macOS
+on:
+  push:
+    paths: ['slstatus/**', '.github/workflows/slstatus-macos.yml']
+  pull_request:
+    paths: ['slstatus/**', '.github/workflows/slstatus-macos.yml']
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-14
+    env:
+      CFLAGS: -O2 -Wall -Wextra -Werror
+    steps:
+      - uses: actions/checkout@v4
+      - name: Portable support tests
+        run: make -C slstatus test-native CFLAGS="$CFLAGS"
+      - name: Native build
+        run: make -C slstatus CFLAGS="$CFLAGS"
+      - name: One-shot status
+        run: |
+          slstatus/macos/slstatus-macos -1 > "$RUNNER_TEMP/status"
+          test -s "$RUNNER_TEMP/status"
+          test "$(wc -l < "$RUNNER_TEMP/status" | tr -d ' ')" = 1
+          grep 'BER ' "$RUNNER_TEMP/status"
+          grep 'IST ' "$RUNNER_TEMP/status"
+      - name: Status file and shutdown smoke test
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          import signal
+          import subprocess
+          import time
+
+          path = pathlib.Path.home() / 'Library/Application Support/dwm/status'
+          process = subprocess.Popen(['slstatus/macos/slstatus-macos'])
+          try:
+              deadline = time.monotonic() + 15
+              while not path.exists() and time.monotonic() < deadline:
+                  assert process.poll() is None, 'status producer exited early'
+                  time.sleep(0.1)
+              text = path.read_text(encoding='utf-8')
+              assert 'BER ' in text and 'IST ' in text
+              assert text.endswith('\n') and len(text.splitlines()) == 1
+              assert path.stat().st_mode & 0o777 == 0o600
+              process.send_signal(signal.SIGUSR1)
+              process.terminate()
+              assert process.wait(timeout=5) == 0
+          finally:
+              if process.poll() is None:
+                  process.kill()
+                  process.wait()
+          PY
+      - name: Stage installation
+        run: |
+          make -C slstatus install DESTDIR="$RUNNER_TEMP/slstatus-stage" PREFIX=/usr/local
+          test -x "$RUNNER_TEMP/slstatus-stage/usr/local/bin/slstatus-macos"
+          make -C slstatus uninstall DESTDIR="$RUNNER_TEMP/slstatus-stage" PREFIX=/usr/local
+          test ! -e "$RUNNER_TEMP/slstatus-stage/usr/local/bin/slstatus-macos"
+      - name: Compile Intel backend
+        run: make -C slstatus/macos clean all CC='clang -arch x86_64' CFLAGS="$CFLAGS"
