@@ -708,6 +708,9 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 	CGEventRef up = CGEventCreateKeyboardEvent(NULL, code, false);
 	CGEventSetFlags(down, modifiers);
 	CGEventSetFlags(up, modifiers);
+	/* Do not consume our launcher shortcut as a dwm binding. */
+	CGEventSetIntegerValueField(down, kCGEventSourceUserData, 0x64776d);
+	CGEventSetIntegerValueField(up, kCGEventSourceUserData, 0x64776d);
 	CGEventPost(kCGSessionEventTap, down);
 	CGEventPost(kCGSessionEventTap, up);
 	CFRelease(down);
@@ -791,7 +794,8 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 
 - (CGEventRef)event:(CGEventRef)event type:(CGEventType)type
 {
-	CGEventFlags flags = CGEventGetFlags(event) & (ALT|SHIFT|CTRL|kCGEventFlagMaskCommand);
+	if (CGEventGetIntegerValueField(event, kCGEventSourceUserData) == 0x64776d) return event;
+	CGEventFlags flags = CGEventGetFlags(event) & (kCGEventFlagMaskAlternate|SHIFT|CTRL|kCGEventFlagMaskCommand);
 	if (type == kCGEventKeyDown || type == kCGEventKeyUp) {
 		CGKeyCode code = (CGKeyCode)CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode);
 		if (type == kCGEventKeyUp) {
@@ -822,7 +826,7 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 	BOOL down = type == kCGEventLeftMouseDown || type == kCGEventRightMouseDown || type == kCGEventOtherMouseDown;
 	BOOL up = type == kCGEventLeftMouseUp || type == kCGEventRightMouseUp || type == kCGEventOtherMouseUp;
 	int button = (int)CGEventGetIntegerValueField(event, kCGMouseEventButtonNumber);
-	if (down && flags == ALT && button <= 2 && !self.dragClient) {
+	if (down && flags == MODKEY && button <= 2 && !self.dragClient) {
 		[self refreshWindows];
 		Client *c = [self clientAt:p];
 		if (!c || c.fullscreen) return event;
@@ -974,12 +978,12 @@ static NSFont *barFont(void)
 	Monitor *m = self.monitor;
 	if (manager.selected != m) { manager.selected = m; [manager action:@"focusmon" value:0]; }
 	CGFloat x = [self convertPoint:event.locationInWindow fromView:nil].x, w = self.bounds.size.width, edge = 0;
-	BOOL alt = (event.modifierFlags & NSEventModifierFlagOption) != 0;
+	BOOL mod = (event.modifierFlags & MODKEY) != 0;
 	BOOL right = event.buttonNumber == 1, middle = event.buttonNumber == 2;
 	for (size_t i = 0; i < LENGTH(tagNames); ++i) {
 		edge += [self width:tagNames[i]];
 		if (x < edge) {
-			if (!middle) [manager action:alt ? (right ? @"toggletag" : @"tag") : (right ? @"toggleview" : @"view") value:(int)(1u << i)];
+			if (!middle) [manager action:mod ? (right ? @"toggletag" : @"tag") : (right ? @"toggleview" : @"view") value:(int)(1u << i)];
 			return;
 		}
 	}

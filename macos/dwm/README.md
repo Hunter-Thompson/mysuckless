@@ -19,7 +19,7 @@ it also needs Input Monitoring (System Settings → Privacy & Security). dwm wai
 and starts working as soon as access is granted; no restart needed. Rebuilding
 the binary may require granting access again. Only one instance runs per user.
 
-Stop it with Option-Shift-Q, Ctrl-C or SIGTERM. On exit dwm brings back windows
+Stop it with Command-Shift-Q, Ctrl-C or SIGTERM. On exit dwm brings back windows
 it hid and leaves everything else where it is.
 
 ## How it maps to macOS
@@ -34,7 +34,7 @@ it hid and leaves everything else where it is.
   on the way to a menu would switch apps.
 - **Spaces, Mission Control and the green button** stay macOS's. dwm only
   manages windows on the current Space; a window in a native fullscreen Space is
-  left alone. Simulated fullscreen (Option-Shift-F) fills the visible screen
+  left alone. Simulated fullscreen (Command-Shift-F) fills the visible screen
   below the menu bar.
 - **Minimized windows and hidden apps (Cmd-H)** keep their tags but are left
   alone until they come back.
@@ -60,7 +60,7 @@ it hid and leaves everything else where it is.
 
 ## Configuration
 
-Edit `config.h` and rebuild, as with dwm. Option replaces Mod1; key codes are
+Edit `config.h` and rebuild, as with dwm. Command replaces Mod1; key codes are
 physical ANSI positions. Defaults mirror `../../dwm/config.h`: five tags, master factor
 0.55, one master, tile/float/monocle, a 25-point top bar and the same colors.
 Rules match an exact bundle identifier and/or a title substring; monitors are
@@ -68,31 +68,36 @@ zero-based in `NSScreen` order.
 
 | Shortcut | Action |
 | --- | --- |
-| Option-P | launcher: dwm presses `launcherKey` (Cmd-Space, Spotlight) |
-| Option-Shift-Return | terminal (`commands[0]`) |
-| Option-B | toggle bar |
-| Option-J / K | focus next / previous window |
-| Option-I / D | more / fewer masters |
-| Option-H / L | shrink / grow master area |
-| Option-Return | zoom (swap with master) |
-| Option-Tab | previous tag view |
-| Option-Shift-C | close window (presses its close button) |
-| Option-T / F / M | tile / floating / monocle |
-| Option-Space | previous layout |
-| Option-Shift-Space | toggle floating |
-| Option-Shift-F | toggle fullscreen |
-| Option-1…5 | view tag; Control adds to view |
-| Option-Shift-1…5 | move window to tag; Control toggles membership |
-| Option-0 / Option-Shift-0 | view all / put window on all tags |
-| Option-, / . | focus previous / next monitor; Shift sends the window |
-| Option-Shift-Q | quit |
+| Command-P | launcher: dwm presses `launcherKey` (Cmd-Space, Spotlight) |
+| Command-Shift-Return | terminal (`commands[0]`) |
+| Command-B | toggle bar |
+| Command-J / K | focus next / previous window |
+| Command-I / D | more / fewer masters |
+| Command-H / L | shrink / grow master area |
+| Command-Return | zoom (swap with master) |
+| Command-Tab | previous tag view |
+| Command-Shift-C | close window (presses its close button) |
+| Command-T / F / M | tile / floating / monocle |
+| Command-Space | previous layout |
+| Command-Shift-Space | toggle floating |
+| Command-Shift-F | toggle fullscreen |
+| Command-1…5 | view tag; Control adds to view |
+| Command-Shift-1…5 | move window to tag; Control toggles membership |
+| Command-0 / Command-Shift-0 | view all / put window on all tags |
+| Command-, / . | focus previous / next monitor; Shift sends the window |
+| Command-Shift-Q | quit |
 
-Mouse: Option-left-drag moves (snaps to edges, tiled windows float after 32
-points), Option-right-drag resizes, Option-middle-click toggles floating, and
+Mouse: Command-left-drag moves (snaps to edges, tiled windows float after 32
+points), Command-right-drag resizes, Command-middle-click toggles floating, and
 dropping a window on another display moves it there. Bar: left/right click a
-tag to view/toggle it (with Option: tag/toggle the window), click the layout
+tag to view/toggle it (with Command: tag/toggle the window), click the layout
 symbol for the previous layout (right click: monocle), middle-click the title to
 zoom and the status to open a terminal.
+
+Command bindings take precedence over matching app and system shortcuts while dwm
+is running (including Command-Tab, Command-Space and Command-H). The launcher
+still sends Command-Space to Spotlight. Change `MODKEY` in `config.h` to choose
+a different modifier.
 
 ## Known limits
 
