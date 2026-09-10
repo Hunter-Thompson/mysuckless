@@ -42,10 +42,13 @@ it hid and leaves everything else where it is.
   move; dwm logs the first refusal per window. Non-resizable windows, dialogs and
   panels start floating.
 - **The bar** sits at the top of each display's visible area, below the menu bar
-  and clear of the Dock and notch. With the menu bar set to auto-hide, the bar
-  and the tiles use the full height (the auto-hidden menu bar slides over them).
-  If dwm still leaves a gap at the top, set `menuBarInset` in `config.h` to 0;
-  dwm logs each display's work area at startup. Layout: tags, layout symbol, title, status.
+  and clear of the Dock. With the menu bar set to auto-hide, the bar and the
+  tiles use the full height (the auto-hidden menu bar slides over them). On a
+  MacBook with a notch, macOS keeps windows out of the strip beside the notch
+  even when the menu bar is hidden, so dwm puts its bar there instead: tags,
+  layout and title left of the notch, status right of it, and windows get the
+  whole area below. dwm logs each display's work area at startup; `menuBarInset`
+  in `config.h` overrides the detection. Layout: tags, layout symbol, title, status.
   Status text is read every half second from
   `~/Library/Application Support/dwm/status` (UTF-8, first 4 KiB), e.g.
 

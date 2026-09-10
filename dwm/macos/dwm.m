@@ -116,6 +116,9 @@ static NSColor *color(unsigned rgb)
 @interface Monitor : NSObject
 @property(strong) NSNumber *display;
 @property DwmRect frame, work;     /* CoreGraphics coordinates, origin top-left */
+@property DwmRect bar;             /* bar frame when it lives beside a notch */
+@property BOOL notchBar;           /* bar sits in the notch strip, not in the work area */
+@property CGFloat gapStart, gapEnd; /* notch, in bar coordinates */
 @property unsigned tags, previousTags;
 @property int layout, previousLayout, masters;
 @property double factor;
@@ -317,7 +320,20 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 			visible.size.height = top - visible.origin.y;
 		}
 		m.work = (DwmRect){visible.origin.x, self.top - NSMaxY(visible), visible.size.width, visible.size.height};
-		NSLog(@"display %@: %gx%g, work area %gx%g at %g,%g%@", display, m.frame.w, m.frame.h, m.work.w, m.work.h, m.work.x, m.work.y, menuBarHidden ? @" (menu bar hides)" : @"");
+		/* With the menu bar hidden, macOS still keeps windows out of the notch strip.
+		 * Use that strip for the bar, beside the notch, and give windows everything below. */
+		m.notchBar = NO;
+		if (@available(macOS 12.0, *)) {
+			NSRect left = screen.auxiliaryTopLeftArea, right = screen.auxiliaryTopRightArea;
+			if (inset == 0 && topBar && screen.safeAreaInsets.top > 0 && !NSIsEmptyRect(left) && !NSIsEmptyRect(right)) {
+				m.notchBar = YES;
+				m.bar = (DwmRect){m.frame.x, m.frame.y, m.frame.w, screen.safeAreaInsets.top};
+				m.gapStart = NSMaxX(left) - NSMinX(screen.frame);
+				m.gapEnd = NSMinX(right) - NSMinX(screen.frame);
+			}
+		}
+		NSLog(@"display %@: %gx%g, work area %gx%g at %g,%g%@%@", display, m.frame.w, m.frame.h, m.work.w, m.work.h, m.work.x, m.work.y,
+			menuBarHidden ? @" (menu bar hides)" : @"", m.notchBar ? @", bar beside the notch" : @"");
 		if (!m.panel) {
 			m.panel = [[NSPanel alloc] initWithContentRect:NSZeroRect styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];
 			m.panel.level = NSFloatingWindowLevel;
@@ -347,6 +363,14 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 	for (Monitor *m in self.monitors)
 		if (CGRectContainsPoint(CGRectMake(m.frame.x, m.frame.y, m.frame.w, m.frame.h), p)) return m;
 	return self.selected ?: self.monitors.firstObject;
+}
+
+/* the area windows may use: the work area minus the bar when the bar is in it */
+- (DwmRect)area:(Monitor *)m
+{
+	DwmRect a = m.work;
+	if (m.showbar && !m.notchBar) { a.h -= barHeight; if (topBar) a.y += barHeight; }
+	return a;
 }
 
 - (BOOL)isVisible:(Client *)c
@@ -440,6 +464,7 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 	}
 	[c.monitor.clients insertObject:c atIndex:0];
 	[c.monitor.history insertObject:c atIndex:0];
+	NSLog(@"manage %@ \"%@\" %gx%g at %g,%g%@ tags %u", app.localizedName, title, frame.w, frame.h, frame.x, frame.y, c.floating ? @" floating" : @"", c.tags);
 	ApplicationWatch *watch = self.watches[@(pid)];
 	if (watch.observer) AXObserverAddNotification(watch.observer, element, kAXUIElementDestroyedNotification, (__bridge void *)self);
 	return c;
@@ -454,6 +479,7 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 		[m.history removeObject:c];
 		if (m.selected == c) m.selected = nil;
 		if (self.dragClient == c) self.dragClient = nil;
+		NSLog(@"unmanage \"%@\"", c.title);
 		changed = YES;
 	}
 	return changed;
@@ -586,9 +612,9 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 	[target.clients insertObject:c atIndex:0];
 	[target.history insertObject:c atIndex:0];
 	if (relocate && c.floating && !c.fullscreen) {
-		DwmRect r = c.frame;
-		r.x = target.work.x;
-		r.y = target.work.y + (target.showbar && topBar ? barHeight : 0);
+		DwmRect r = c.frame, a = [self area:target];
+		r.x = a.x;
+		r.y = a.y;
 		[self resize:c frame:r];
 	}
 }
@@ -596,15 +622,24 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 - (void)arrange
 {
 	for (Monitor *m in self.monitors) {
-		DwmRect area = m.work;
 		BOOL covered = NO;
 		for (Client *c in m.clients) if (!c.away && ((c.fullscreen && (c.tags & m.tags)) || c.nativeFullscreen)) covered = YES;
-		if (m.showbar && !covered) {
-			CGFloat barY = topBar ? area.y : area.y + area.h - barHeight;
-			[m.panel setFrame:NSMakeRect(area.x, self.top - barY - barHeight, area.w, barHeight) display:YES];
+		DwmRect area = [self area:m];
+		for (;;) {
+			DwmRect bar = m.notchBar ? m.bar : (DwmRect){m.work.x, topBar ? m.work.y : m.work.y + m.work.h - barHeight, m.work.w, barHeight};
+			if (!m.showbar || covered) { [m.panel orderOut:nil]; break; }
+			NSRect frame = NSMakeRect(bar.x, self.top - bar.y - bar.h, bar.w, bar.h);
+			[m.panel setFrame:frame display:YES];
+			if (m.notchBar && fabs(m.panel.frame.origin.y - frame.origin.y) > 1) {
+				/* AppKit refused the notch strip: fall back to a bar inside the work area */
+				NSLog(@"bar cannot use the notch strip on display %@", m.display);
+				m.notchBar = NO;
+				area = [self area:m];
+				continue;
+			}
 			[m.panel orderFrontRegardless];
-		} else [m.panel orderOut:nil];
-		if (m.showbar) { area.h -= barHeight; if (topBar) area.y += barHeight; }
+			break;
+		}
 		for (Client *c in m.clients) {
 			if (c.away || c.nativeFullscreen) continue;
 			if (c.tags & m.tags) [self unpark:c]; else [self park:c];
@@ -809,8 +844,7 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 		c.floating = YES;
 		if (self.dragButton == 0) {
 			Monitor *target = [self monitorAt:p];
-			DwmRect a = target.work;
-			if (target.showbar) { a.h -= barHeight; if (topBar) a.y += barHeight; }
+			DwmRect a = [self area:target];
 			r.x += dx; r.y += dy;
 			if (fabs(r.x - a.x) < snapDistance) r.x = a.x;
 			if (fabs(r.y - a.y) < snapDistance) r.y = a.y;
@@ -875,14 +909,15 @@ static NSFont *barFont(void)
 
 - (void)drawText:(NSString *)text x:(CGFloat)x width:(CGFloat)w selected:(BOOL)selected
 {
+	CGFloat h = self.bounds.size.height;
 	[color(selected ? colSelBG : colNormBG) setFill];
-	NSRectFill(NSMakeRect(x, 0, w, barHeight));
+	NSRectFill(NSMakeRect(x, 0, w, h));
 	NSFont *font = barFont();
 	NSMutableParagraphStyle *style = [NSMutableParagraphStyle new];
 	style.lineBreakMode = NSLineBreakByTruncatingTail;
 	NSDictionary *attributes = @{NSFontAttributeName: font, NSForegroundColorAttributeName: color(selected ? colSelFG : colNormFG), NSParagraphStyleAttributeName: style};
-	CGFloat y = floor((barHeight - (font.ascender - font.descender)) / 2);
-	[text drawInRect:NSMakeRect(x + fontSize / 2, y, MAX(0, w - fontSize), barHeight - y) withAttributes:attributes];
+	CGFloat y = floor((h - (font.ascender - font.descender)) / 2);
+	[text drawInRect:NSMakeRect(x + fontSize / 2, y, MAX(0, w - fontSize), h - y) withAttributes:attributes];
 }
 
 - (void)drawRect:(NSRect)dirtyRect
@@ -910,15 +945,17 @@ static NSFont *barFont(void)
 	CGFloat lw = [self width:symbol];
 	[self drawText:symbol x:x width:lw selected:NO];
 	x += lw;
-	CGFloat sw = 0;
+	CGFloat sw = 0, titleEnd = w;
 	if (m == manager.selected) {
-		sw = MIN([self width:manager.status], MAX(0, w - x));
+		sw = MIN([self width:manager.status], MAX(0, w - (m.notchBar ? m.gapEnd : x)));
 		[self drawText:manager.status x:w - sw width:sw selected:NO];
+		titleEnd = w - sw;
 	}
-	if (w - sw > x) {
+	if (m.notchBar) titleEnd = MIN(titleEnd, m.gapStart);   /* the title stops at the notch */
+	if (titleEnd > x) {
 		Client *c = m.selected;
 		if (c) {
-			[self drawText:c.title x:x width:w - sw - x selected:m == manager.selected];
+			[self drawText:c.title x:x width:titleEnd - x selected:m == manager.selected];
 			if (c.floating) { [color(m == manager.selected ? colSelFG : colNormFG) setFill]; NSFrameRect(NSMakeRect(x + 2, 2, box, box)); }
 		}
 	}
@@ -945,7 +982,8 @@ static NSFont *barFont(void)
 		return;
 	}
 	if (!middle) return;
-	CGFloat sw = MIN([self width:manager.status], MAX(0, w - edge));
+	CGFloat sw = MIN([self width:manager.status], MAX(0, w - (m.notchBar ? m.gapEnd : edge)));
+	if (m.notchBar && x >= m.gapStart && x < w - sw) return;
 	[manager action:x >= w - sw ? @"spawn" : @"zoom" value:0];
 }
 
