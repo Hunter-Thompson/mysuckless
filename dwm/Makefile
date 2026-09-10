@@ -1,6 +1,10 @@
 # dwm - dynamic window manager
 # See LICENSE file for copyright and license details.
 
+ifeq ($(shell uname -s),Darwin)
+all install uninstall clean:
+	$(MAKE) -C macos $@
+else
 include config.mk
 
 SRC = drw.c dwm.c util.c
@@ -49,3 +53,10 @@ uninstall:
 		${DESTDIR}${MANPREFIX}/man1/dwm.1
 
 .PHONY: all options clean dist install uninstall
+endif
+
+# portable tests of the layout model shared with the macOS backend
+test-native:
+	$(MAKE) -C macos test
+
+.PHONY: test-native

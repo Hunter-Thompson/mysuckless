@@ -3,6 +3,8 @@ util.o
 dwm.o
 config.def.h
 dwm/dwm
+dwm/macos/dwm-macos
+dwm/macos/model-test
 dmenu/dmenu
 slstatus/slstatus
 dwmstatus/dwmstatus
