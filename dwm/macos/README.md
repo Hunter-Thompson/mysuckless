@@ -62,8 +62,8 @@ zero-based in `NSScreen` order.
 
 | Shortcut | Action |
 | --- | --- |
-| Option-P | launcher (`launcherCommand`, Spotlight) |
-| Option-Shift-Return | terminal (`terminalCommand`) |
+| Option-P | launcher: dwm presses `launcherKey` (Cmd-Space, Spotlight) |
+| Option-Shift-Return | terminal (`commands[0]`) |
 | Option-B | toggle bar |
 | Option-J / K | focus next / previous window |
 | Option-I / D | more / fewer masters |

@@ -634,8 +634,24 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 	NSTask *task = [NSTask new];
 	task.executableURL = [NSURL fileURLWithPath:@"/bin/sh"];
 	task.arguments = @[@"-c", command];
+	task.terminationHandler = ^(NSTask *finished) {
+		if (finished.terminationStatus) NSLog(@"%@ exited with status %d", command, finished.terminationStatus);
+	};
 	NSError *error = nil;
 	if (![task launchAndReturnError:&error]) NSLog(@"Cannot run %@: %@", command, error);
+}
+
+/* presses a system shortcut; needs only the Accessibility access dwm already has */
+- (void)press:(CGKeyCode)code modifiers:(CGEventFlags)modifiers
+{
+	CGEventRef down = CGEventCreateKeyboardEvent(NULL, code, true);
+	CGEventRef up = CGEventCreateKeyboardEvent(NULL, code, false);
+	CGEventSetFlags(down, modifiers);
+	CGEventSetFlags(up, modifiers);
+	CGEventPost(kCGSessionEventTap, down);
+	CGEventPost(kCGSessionEventTap, up);
+	CFRelease(down);
+	CFRelease(up);
 }
 
 - (void)action:(NSString *)name value:(int)value
@@ -643,7 +659,8 @@ static CGEventRef input(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 	Monitor *m = self.selected;
 	Client *c = m.selected;
 	if ([name isEqual:@"quit"]) { [NSApp terminate:nil]; return; }
-	if ([name isEqual:@"spawn"]) { [self spawn:value ? terminalCommand : launcherCommand]; return; }
+	if ([name isEqual:@"launcher"]) { [self press:launcherKey modifiers:launcherModifiers]; return; }
+	if ([name isEqual:@"spawn"]) { if (value >= 0 && value < (int)LENGTH(commands)) [self spawn:commands[value]]; return; }
 	if (!m) return;
 	if ([name isEqual:@"view"]) {
 		unsigned next = value ? ((unsigned)value & DWM_TAGMASK) : m.previousTags;
@@ -911,7 +928,7 @@ static NSFont *barFont(void)
 	}
 	if (!middle) return;
 	CGFloat sw = MIN([self width:manager.status], MAX(0, w - edge));
-	[manager action:x >= w - sw ? @"spawn" : @"zoom" value:1];
+	[manager action:x >= w - sw ? @"spawn" : @"zoom" value:0];
 }
 
 - (void)mouseDown:(NSEvent *)event { [self click:event]; }

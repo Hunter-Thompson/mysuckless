@@ -30,9 +30,12 @@ static const struct {
 /* layouts: index 0 tile, 1 floating, 2 monocle */
 static NSString *const layoutNames[] = {@"[]=", @"><>", @"[M]"};
 
-/* commands, run with /bin/sh -c */
-static NSString *const terminalCommand = @"/usr/bin/open -a Terminal";
-static NSString *const launcherCommand = @"/usr/bin/open -a Spotlight";
+/* commands, run with /bin/sh -c; spawn's value indexes this array */
+static NSString *const commands[] = {@"/usr/bin/open -a Terminal"};
+/* launcher: dwm presses this system shortcut itself (Cmd-Space opens Spotlight;
+ * set it to whatever hotkey Raycast, Alfred etc. use) */
+static const CGKeyCode launcherKey = 49;
+static const CGEventFlags launcherModifiers = kCGEventFlagMaskCommand;
 
 /* key definitions */
 #define ALT kCGEventFlagMaskAlternate
@@ -50,8 +53,8 @@ static const struct {
 	int value;
 } keys[] = {
 	/* code  modifiers        action            value */
-	{35, ALT,            @"spawn",          0},   /* p */
-	{36, ALT|SHIFT,      @"spawn",          1},   /* return */
+	{35, ALT,            @"launcher",       0},   /* p */
+	{36, ALT|SHIFT,      @"spawn",          0},   /* return: commands[0] */
 	{11, ALT,            @"togglebar",      0},   /* b */
 	{38, ALT,            @"focusstack",     1},   /* j */
 	{40, ALT,            @"focusstack",    -1},   /* k */
