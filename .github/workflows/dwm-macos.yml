@@ -17,6 +17,12 @@ jobs:
         run: make -C dwm test-native CFLAGS="$CFLAGS"
       - name: Native build
         run: make -C dwm CFLAGS="$CFLAGS"
+      - name: Command line smoke test
+        run: |
+          macos/dwm/dwm-macos --help
+          if macos/dwm/dwm-macos --bogus 2>/dev/null; then exit 1; fi
+          codesign -dv macos/dwm/dwm-macos
+          otool -s __TEXT __info_plist macos/dwm/dwm-macos | grep -q info_plist
       - name: Compile Intel backend
         run: make -C macos/dwm clean all CC='clang -arch x86_64' CFLAGS="$CFLAGS"
       - name: Stage installation
