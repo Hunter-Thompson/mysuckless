@@ -6,5 +6,6 @@ typedef struct { double x, y, w, h; } DwmRect;
 #define DWM_TAGMASK 31u
 unsigned dwm_tags(unsigned current, unsigned requested, int toggle);
 DwmRect dwm_tile(DwmRect area, size_t index, size_t count, int masters, double factor);
+double dwm_factor(double areaWidth, double width, int master);
 int dwm_monitor(int current, int direction, int count);
 #endif

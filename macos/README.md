@@ -21,9 +21,11 @@ delegate here as well. On Linux they still build the original X11 versions.
 Spotlight remains dwm's launcher; dmenu is unchanged.
 
 Run `dwm-macos` and `slstatus-macos` from your installation's `bin` directory
-in separate terminals. See each backend's README for permissions, configuration,
-shortcuts and limitations. slstatus publishes to
-`~/Library/Application Support/dwm/status`, which dwm reads automatically.
+in separate terminals, or install dwm as a LaunchAgent with
+`make -C macos/dwm install-agent PREFIX="$HOME/.local"`. See each backend's
+README for permissions, configuration, shortcuts and limitations. slstatus
+publishes to `~/Library/Application Support/dwm/status`, which dwm reads
+automatically.
 
 Portable tests (also runnable on Linux):
 

@@ -18,6 +18,9 @@ static const BOOL lockFullscreen = YES;    /* keep dwm focus on a fullscreen win
  * to the active application, so crossing windows on the way to a menu would
  * switch applications. Clicking a window focuses it either way. */
 static const BOOL sloppyFocus = NO;
+/* New windows take focus, as in dwm. Windows that an application opens on a
+ * tag that is not in view never take focus or switch the view. */
+static const BOOL focusNewWindows = YES;
 
 /* tagging */
 static NSString *const tagNames[] = {@"1", @"2", @"3", @"4", @"5"};
@@ -25,9 +28,9 @@ static NSString *const tagNames[] = {@"1", @"2", @"3", @"4", @"5"};
 static const struct {
 	NSString *bundle;   /* exact bundle identifier or nil */
 	NSString *title;    /* title substring or nil */
-	unsigned tags;      /* 0 keeps the current view */
+	unsigned tags;      /* 0 keeps the current view; matching rules are OR-ed */
 	BOOL floating;
-	int monitor;        /* -1 keeps the window's monitor */
+	int monitor;        /* -1 keeps the window's monitor; displays are numbered left to right */
 } rules[] = {
 	{@"org.gimp.gimp", nil, 0, YES, -1},
 };
@@ -46,6 +49,12 @@ static const CGEventFlags launcherModifiers = kCGEventFlagMaskCommand;
 #define MODKEY kCGEventFlagMaskCommand
 #define SHIFT kCGEventFlagMaskShift
 #define CTRL kCGEventFlagMaskControl
+#define ALT kCGEventFlagMaskAlternate
+/* Modifier for moving (left button), toggling floating (middle) and resizing
+ * (right button) windows with the mouse. dwm uses MODKEY; on macOS plain
+ * Command-click is taken by nearly every application (links, selections,
+ * "go to definition"), so Control is added by default. */
+#define MOUSEMOD (MODKEY|CTRL)
 #define TAGKEY(code, mask) \
 	{code, MODKEY, @"view", mask}, \
 	{code, MODKEY|CTRL, @"toggleview", mask}, \
@@ -78,6 +87,7 @@ static const struct {
 	{3,  MODKEY|SHIFT,      @"togglefullscr",  0},   /* f */
 	{29, MODKEY,            @"view",           DWM_TAGMASK}, /* 0 */
 	{29, MODKEY|SHIFT,      @"tag",            DWM_TAGMASK}, /* 0 */
+	/* with a single display these four are left to the applications (Cmd-, opens Settings) */
 	{43, MODKEY,            @"focusmon",      -1},   /* comma */
 	{47, MODKEY,            @"focusmon",       1},   /* period */
 	{43, MODKEY|SHIFT,      @"tagmon",        -1},   /* comma */
